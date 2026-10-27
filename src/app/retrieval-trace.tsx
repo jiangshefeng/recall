@@ -1,6 +1,5 @@
 import type { Evidence, ExpansionReason, Hit, RetrievalMode } from "@/lib/types";
 import { StageArchive } from "./stage-archive";
-import { Icon } from "./icons";
 
 const reasons: Record<ExpansionReason, string> = {
   "sources-only": "当前选择原文追溯，不进行关联扩展",
@@ -20,11 +19,11 @@ function HitCard({ hit, index }: { hit: Hit; index: number }) {
   </div>;
 }
 
-export function RetrievalTrace({ evidence, strategy, scope = "default" }: { evidence: Evidence | null; strategy: RetrievalMode; scope?: string }) {
+export function RetrievalTrace({ evidence, strategy, scope = "default", onClose }: { evidence: Evidence | null; strategy: RetrievalMode; scope?: string; onClose?: () => void }) {
   const trace = evidence?.trace;
   const mode = evidence?.strategy || strategy;
-  return <aside className="retrieval-panel panel">
-    <div className="panel-heading"><h2><Icon name="route" size={17} />记忆路径</h2><span className="tiny-tag">TRACE</span></div>
+  return <aside className="retrieval-panel panel" aria-label="记忆路径">
+    <div className="panel-heading"><h2>记忆路径</h2>{onClose && <button className="text-button" onClick={onClose}>关闭面板</button>}</div>
     <div className="trace-intro">从一条记忆，找到回答的依据。</div>
     {trace && <div className="budget-summary" data-testid="budget-usage">
       <strong>历史证据预算</strong>
@@ -55,7 +54,7 @@ export function RetrievalTrace({ evidence, strategy, scope = "default" }: { evid
         </details>;
       })}
     </div>
-    {!evidence && <div className="trace-empty"><div className="trace-empty-icon"><Icon name="route" size={25} /></div><p>记忆正在等一个问题</p><small>发送后，在这里查看关联与来源。</small></div>}
+    {!evidence && <div className="trace-empty"><p>暂无检索记录</p><small>发送问题后，在这里查看关联与来源。</small></div>}
     {evidence && !evidence.first.length && <div className="trace-empty"><p>没有在相关性和预算限制内选入证据。<br />不会强行补满结果。</p></div>}
     <div className="trace-bottom">相似度不代表事实可信度。token 为文本估算值，字符限制同时生效。</div>
   </aside>;

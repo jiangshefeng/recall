@@ -8,6 +8,9 @@ export class MemoryStore {
   constructor(path: string) {
     if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
     this.db = new DatabaseSync(path);
+    this.ensureSchema();
+  }
+  ensureSchema() {
     this.db.exec(`
       PRAGMA journal_mode=WAL;
       PRAGMA busy_timeout=5000;
@@ -28,6 +31,7 @@ export class MemoryStore {
         source_ids TEXT NOT NULL, created_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS memory_stages (memory_id TEXT PRIMARY KEY, stage_id TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS memory_kinds (memory_id TEXT PRIMARY KEY, kind TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS memory_operations (
         id INTEGER PRIMARY KEY, scope TEXT NOT NULL, action TEXT NOT NULL,
         target_id TEXT NOT NULL, incoming_id TEXT NOT NULL, result_id TEXT,
@@ -44,6 +48,7 @@ export class MemoryStore {
     this.db.prepare("INSERT INTO memories VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
       .run(m.id, m.scope, m.summary, JSON.stringify(m.vector), m.space, m.status,
         JSON.stringify(m.sourceIds), JSON.stringify(m.parentIds), m.reason, m.createdAt);
+    this.db.prepare("INSERT INTO memory_kinds VALUES (?, ?)").run(m.id, m.kind ?? "fact");
     if (m.stage) {
       this.db.prepare("INSERT OR IGNORE INTO stages VALUES (?, ?, ?, ?, ?)")
         .run(m.stage.id, m.scope, m.stage.content, JSON.stringify(m.stage.sourceIds), m.stage.createdAt);
@@ -96,12 +101,14 @@ export class MemoryStore {
     const conditions = ["m.scope=?"], values = [scope];
     if (space !== undefined) { conditions.push("m.space=?"); values.push(space); }
     if (status !== undefined) { conditions.push("m.status=?"); values.push(status); }
-    const rows = this.db.prepare(`SELECT m.*, s.id AS stage_id, s.content AS stage_content,
+    const rows = this.db.prepare(`SELECT m.*, k.kind, s.id AS stage_id, s.content AS stage_content,
       s.source_ids AS stage_sources, s.created_at AS stage_date FROM memories m
       LEFT JOIN memory_stages ms ON ms.memory_id=m.id LEFT JOIN stages s ON s.id=ms.stage_id AND s.scope=m.scope
+      LEFT JOIN memory_kinds k ON k.memory_id=m.id
       WHERE ${conditions.join(" AND ")} ORDER BY m.created_at DESC`).all(...values);
     return rows.map(row => ({
       id: String(row.id), scope: String(row.scope), summary: String(row.summary),
+      kind: row.kind === "qa" || (!row.kind && String(row.summary).startsWith("问答记录（助手回答未验证）：")) ? "qa" : "fact",
       vector: JSON.parse(String(row.vector)), space: String(row.space),
       status: row.status as "hot" | "cold", sourceIds: JSON.parse(String(row.source_ids)),
       parentIds: JSON.parse(String(row.parent_ids)), reason: String(row.reason), createdAt: String(row.created_at),
@@ -131,7 +138,18 @@ export class MemoryStore {
   }
 }
 
-const globalStore = globalThis as unknown as { ragStore?: MemoryStore };
+const STORE_SCHEMA_VERSION = 3;
+const globalStore = globalThis as unknown as { ragStore?: MemoryStore; ragStoreSchemaVersion?: number };
 export function getStore() {
-  return globalStore.ragStore ??= new MemoryStore(process.env.RAG_DB_PATH || join(process.cwd(), "data", "rag.sqlite"));
+  if (!globalStore.ragStore) {
+    globalStore.ragStore = new MemoryStore(process.env.RAG_DB_PATH || join(process.cwd(), "data", "rag.sqlite"));
+    globalStore.ragStoreSchemaVersion = STORE_SCHEMA_VERSION;
+  } else if (globalStore.ragStoreSchemaVersion !== STORE_SCHEMA_VERSION) {
+    // Dev HMR preserves globalThis. Upgrade methods and additive tables without
+    // closing the connection that an in-flight model request may still be using.
+    Object.setPrototypeOf(globalStore.ragStore, MemoryStore.prototype);
+    globalStore.ragStore.ensureSchema();
+    globalStore.ragStoreSchemaVersion = STORE_SCHEMA_VERSION;
+  }
+  return globalStore.ragStore;
 }

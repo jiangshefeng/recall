@@ -4,6 +4,41 @@ import { resolve } from "node:path";
 import { MemoryStore } from "../src/lib/store";
 import { demoEmbedding } from "../src/lib/similarity";
 
+test("streamed text is visible before completion and user messages align to the right", async ({ page }) => {
+  await page.addInitScript(() => {
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      if (input !== "/api/chat") return originalFetch(input, init);
+      const encoder = new TextEncoder();
+      const body = new ReadableStream<Uint8Array>({ start(controller) {
+        const emit = (data: object) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+        emit({ type: "delta", text: "这是一段" });
+        (window as unknown as { finishChat: () => void }).finishChat = () => {
+          emit({ type: "delta", text: "完整的回答。" });
+          emit({ type: "answer", answer: "这是一段完整的回答。" });
+          emit({ type: "done", memory: { message: "记忆整理完成" }, elapsedMs: 100 });
+          controller.close();
+        };
+      } });
+      return new Response(body, { headers: { "Content-Type": "text/event-stream" } });
+    };
+  });
+  await page.goto("/");
+  await expect(page.getByText("演示模式", { exact: true })).toBeVisible();
+  await page.getByLabel("输入问题").fill("你好");
+  await page.getByRole("button", { name: "发送", exact: true }).click();
+  await expect(page.locator(".message.assistant .message-content")).toHaveText("这是一段");
+  await expect(page.locator(".memory-note")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "发送", exact: true })).toBeDisabled();
+  const user = await page.locator(".message.user .message-content").boundingBox();
+  const assistant = await page.locator(".message.assistant .message-content").boundingBox();
+  expect(user!.x).toBeGreaterThan(assistant!.x + 100);
+  await page.evaluate(() => (window as unknown as { finishChat: () => void }).finishChat());
+  await expect(page.locator(".message.assistant .message-content")).toHaveText("这是一段完整的回答。");
+  await expect(page.locator(".memory-note")).toHaveText("记忆整理完成");
+  await expect(page.getByLabel("输入问题")).toBeEnabled();
+});
+
 test("stage evidence opens archived originals on demand and remains scope isolated", async ({ page, request }) => {
   const scope = `stage_${Date.now()}`;
   const snapshot = await (await request.get(`/api/memories?scope=${scope}`)).json();
@@ -24,6 +59,7 @@ test("stage evidence opens archived originals on demand and remains scope isolat
   await page.getByLabel("输入问题").fill(question);
   await page.getByRole("button", { name: "发送", exact: false }).click();
   await expect(page.locator(".message.assistant")).toContainText("当前8分钟");
+  await page.getByRole("button", { name: "展开记忆", exact: true }).click();
   const panel = page.locator(".retrieval-panel");
   await panel.locator("summary").filter({ hasText: "[1] 阶段摘要" }).click();
   await panel.locator("summary").filter({ hasText: "阶段摘要 · 覆盖 11 条原文" }).click();
@@ -44,6 +80,7 @@ test("below-threshold candidates are displayed separately from evidence", async 
   await expect(page.getByText("关联检索 · 自动追溯原文")).toBeVisible();
   await page.getByLabel("输入问题").fill("zzzzzzzz");
   await page.getByRole("button", { name: "发送", exact: false }).click();
+  await page.getByRole("button", { name: "展开记忆", exact: true }).click();
   const suggestions = page.getByTestId("low-score-suggestions");
   await expect(suggestions).toBeVisible();
   await expect(suggestions.locator(".hit-card")).toHaveCount(3);
@@ -57,6 +94,11 @@ test("demo chat, provenance, merge, retrieval modes, and responsive layout", asy
   page.on("pageerror", e => errors.push(e.message));
   await page.goto("/");
   await expect(page.getByText("演示模式", { exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "记忆统计" })).toHaveCount(0);
+  await expect(page.locator("#memory-panel")).toBeHidden();
+  const fullWidth = (await page.locator(".chat-panel").boundingBox())!.width;
+  const chatBounds = await page.locator(".chat-panel").boundingBox();
+  expect(Math.abs(chatBounds!.y + chatBounds!.height - page.viewportSize()!.height)).toBeLessThan(2);
   await page.getByRole("button", { name: "模型与配置" }).click();
   await page.getByLabel("空间名称").fill(scope);
   await page.getByRole("button", { name: "切换", exact: true }).click();
@@ -69,9 +111,18 @@ test("demo chat, provenance, merge, retrieval modes, and responsive layout", asy
   await page.getByRole("button", { name: "发送", exact: false }).click();
   await expect(page.locator(".message.assistant")).toHaveCount(1);
   await expect(page.locator(".message.assistant")).toContainText("30 分钟");
+  await page.locator(".message.assistant").getByRole("button", { name: /查看本次检索/ }).click();
+  await expect(page.getByRole("button", { name: "收起记忆", exact: true })).toHaveAttribute("aria-expanded", "true");
+  expect((await page.locator(".chat-panel").boundingBox())!.width).toBeLessThan(fullWidth);
   await expect(page.locator(".hit-card").first()).toBeVisible();
   await expect(page.getByTestId("budget-usage")).toContainText("估算");
   await expect(page.getByTestId("expansion-status")).toContainText("已触发第二轮");
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#memory-panel")).toBeHidden();
+  await expect(page.getByRole("button", { name: "展开记忆", exact: true })).toBeFocused();
+  expect((await page.locator(".chat-panel").boundingBox())!.width).toBe(fullWidth);
+  await page.getByRole("button", { name: "展开记忆", exact: true }).click();
+  await expect(page.locator(".hit-card").first()).toBeVisible();
   await page.getByLabel("输入问题").fill("项目 A 的缓存分别多久过期？");
   await page.getByRole("button", { name: "发送", exact: false }).click();
   await expect(page.locator(".message.assistant")).toHaveCount(2);
@@ -102,7 +153,13 @@ test("demo chat, provenance, merge, retrieval modes, and responsive layout", asy
   await expect(page.locator(".provenance")).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole("button", { name: "记忆对话" }).click();
+  await page.getByRole("button", { name: "收起记忆", exact: true }).click();
   await page.getByRole("button", { name: "新对话", exact: true }).click();
+  await page.getByLabel("输入问题").fill("尚未发送的内容");
+  await page.getByRole("button", { name: "展开记忆", exact: true }).click();
+  await expect(page.getByRole("complementary", { name: "记忆路径" })).toBeVisible();
+  await page.getByRole("button", { name: "关闭面板", exact: true }).click();
+  await expect(page.getByLabel("输入问题")).toHaveValue("尚未发送的内容");
   await page.screenshot({ path: "artifacts/mobile.png", fullPage: true });
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
   expect(overflow).toBe(false);

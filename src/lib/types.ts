@@ -9,6 +9,7 @@ export type Memory = {
   id: string;
   scope: string;
   summary: string;
+  kind?: "fact" | "qa";
   vector: number[];
   space: string;
   status: "hot" | "cold";

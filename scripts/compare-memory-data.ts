@@ -1,0 +1,36 @@
+// Synthetic, fixed transcripts. Expected answers are defined before model execution.
+export const transcript = [
+  { id: "learning", question: "我是林舟，最近正在学习 React 和 TypeScript，还没确定自己的职业方向。", answer: "已记录你的学习情况。" },
+  { id: "port", question: "青禾项目使用 Next.js，本地开发端口固定为 4837。", answer: "已记录青禾的框架和开发端口。" },
+  { id: "old-cache", question: "青禾项目的订单缓存默认过期时间是 30 分钟。", answer: "已记录订单缓存配置。" },
+  { id: "old-style", question: "以后讲解技术概念时，默认给我一个具体例子。", answer: "好的，默认配一个例子。" },
+  { id: "budget", question: "青禾项目本月的测试预算是 17300 元。", answer: "已记录本月预算。" },
+  { id: "other-project", question: "另一个海棠项目的订单缓存过期时间是 2 分钟，不要和青禾混淆。", answer: "已分别记录两个项目。" },
+  { id: "allergy", question: "我对花生过敏，但可以正常吃鸡蛋。", answer: "已记录你的饮食限制。" },
+  { id: "new-style", question: "以后讲解不要主动给我例子，我需要的时候会再说。", answer: "好的，以后默认不举例。" },
+  { id: "new-cache", question: "青禾项目订单缓存现在改成 7 分钟，原来的 30 分钟已经废弃。", answer: "已更新为 7 分钟。" },
+  { id: "code", question: "临时帮我记一下，快递取件码是 QX-7319。", answer: "已记录这个临时取件码。" },
+  { id: "forget-code", question: "请忘记刚才的快递取件码，包裹已经取走了。", answer: "好的，撤回这条临时记忆。" },
+  { id: "suggested-name", question: "给青禾项目建议一个两字的内部代号吧。", answer: "我建议叫「星桥」。这只是我的建议，你还没有确认采用。" },
+  { id: "filler-binary", question: "把十进制 12 转换成二进制，只写结果。", answer: "1100" },
+  { id: "filler-http", question: "HTTP 204 表示什么？", answer: "请求成功，但响应没有正文。" },
+  { id: "recent", question: "本轮测试最后的校验词是蓝鲸47。", answer: "已记录校验词。" },
+] as const;
+
+export const cases = [
+  { id: "old-port", category: "旧信息", question: "青禾项目本地开发应该访问哪个端口？", expected: "明确回答 4837；不能猜常见的 3000。", required: ["port"] },
+  { id: "old-budget", category: "旧信息", question: "我给青禾安排的本月测试预算是多少？", expected: "17300 元。", required: ["budget"] },
+  { id: "cache-update", category: "更新", question: "青禾的订单缓存现在多久过期？", expected: "当前为 7 分钟；30 分钟只能作为已废弃旧值。", required: ["new-cache"] },
+  { id: "project-isolation", category: "主体区分", question: "海棠的订单缓存多久过期？", expected: "2 分钟；不能套用青禾的 7 或 30 分钟。", required: ["other-project"] },
+  { id: "combined", category: "多事实", question: "列一下青禾使用的框架、开发端口和本月测试预算。", expected: "Next.js、4837、17300 元三项都正确。", required: ["port", "budget"] },
+  { id: "inference", category: "关联推断", question: "根据我之前告诉你的学习情况，我更偏前端还是后端？", expected: "根据 React/TypeScript 判断更偏前端；不得断言已从事前端职业。", required: ["learning"] },
+  { id: "style-update", category: "更新", question: "我现在希望你讲解时默认带例子吗？", expected: "默认不举例，有需要时用户另行要求。", required: ["new-style"] },
+  { id: "style-application", category: "隐式偏好", question: "解释一下编程中的闭包。", expected: "解释闭包但不主动举例、不附示例代码、不邀请举例。概念解释本身允许。", required: ["new-style"] },
+  { id: "negation", category: "否定信息", question: "根据我说过的饮食限制，花生和鸡蛋我分别能不能吃？", expected: "花生过敏应避免，鸡蛋可以；不能把两者都判为过敏或未知。", required: ["allergy"] },
+  { id: "qa-origin", category: "助手建议来源", question: "我们之前讨论的青禾内部代号是什么？我已经确认采用了吗？", expected: "助手建议过星桥；用户尚未确认采用。", required: ["suggested-name"] },
+  { id: "forget", category: "撤回", question: "你还记得我的快递取件码吗？", expected: "不重新给出 QX-7319；可以说已撤回或不记得。", required: [] },
+  { id: "unknown-owner", category: "空间隔离/未知", question: "我有没有告诉过你青禾项目负责人叫什么？", expected: "当前空间未提供，不能断言负责人是另一个空间的许衡。", required: [] },
+  { id: "unknown-age", category: "未知", question: "我今年具体多少岁？", expected: "没有年龄信息，不能编造具体年龄。", required: [] },
+  { id: "recent-control", category: "近期信息对照", question: "我刚才告诉你的最后校验词是什么？", expected: "蓝鲸47；两组最近 6 条聊天都包含此信息。", required: ["recent"] },
+  { id: "general-control", category: "通用知识对照", question: "HTTP 204 状态码表示什么？", expected: "请求成功且响应无正文；两组都应答对。", required: [] },
+] as const;

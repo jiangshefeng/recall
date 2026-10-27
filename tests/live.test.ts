@@ -14,6 +14,7 @@ test("live adapter flow: merge with provenance, answer with evidence, and retain
   const previousEnv = { ...process.env };
   let broken: "none" | "merge" | "summary" = "none";
   let calls = 0;
+  const embeddingInputs: string[] = [];
   let chosenId: string | undefined;
   let comparedIds: string[] = [];
   let mergeCalls = 0;
@@ -28,13 +29,14 @@ test("live adapter flow: merge with provenance, answer with evidence, and retain
     res.setHeader("Content-Type", "application/json");
     if (req.headers.authorization !== "Bearer local-test") { res.writeHead(401); res.end("{}"); return; }
     calls++;
-    if (req.url === "/v1/embeddings") { res.end(JSON.stringify({ data: [{ embedding: [1, 0, 0] }] })); return; }
+    if (req.url === "/v1/embeddings") { embeddingInputs.push(payload.input); res.end(JSON.stringify({ data: [{ embedding: [1, 0, 0] }] })); return; }
     const system = payload.messages[0].content as string;
     let content: string;
     if (system.includes("提炼当前问答")) {
       const record = JSON.parse(payload.messages.at(-1).content);
       content = broken === "summary" ? "not-json" : JSON.stringify({ facts: record.question === "split"
-        ? ["用户学习 React。", "用户计划下月寻找实习。"] : record.question === "empty" ? [] : ["用户项目默认缓存 30 分钟；助手建议未验证。"] });
+        ? ["用户学习 React。", "用户计划下月寻找实习。"] : record.question.startsWith("empty") ? [] : ["用户项目默认缓存 30 分钟；助手建议未验证。"],
+        ...(record.question === "empty" ? { qaSummary: "用户询问编辑器推荐，助手建议 VS Code。" } : {}) });
     } else if (system.includes("判断两条记忆关系")) {
       const input = JSON.parse(payload.messages.at(-1).content);
       mergeCalls++;
@@ -43,7 +45,9 @@ test("live adapter flow: merge with provenance, answer with evidence, and retain
       batchReusesNewFacts = input.jobs.some((j: { candidateIds: string[] }) => j.candidateIds.some(id => incomingIds.has(id)));
       comparedIds = input.jobs[0].candidateIds;
       content = broken === "merge" ? JSON.stringify({ relation: "delete-everything" }) : JSON.stringify({ decisions: input.jobs.map((job: { incomingId: string; candidateIds: string[] }, i: number) => ({
-        incomingId: job.incomingId, candidateId: chosenId ?? job.candidateIds[i % job.candidateIds.length], relation: "duplicate", summary: "用户项目默认缓存 30 分钟。", reason: "同一属性重复",
+        incomingId: job.incomingId, candidateId: chosenId ?? job.candidateIds[i % job.candidateIds.length], relation: "duplicate",
+        summary: input.memories.find((m: { id: string }) => m.id === job.incomingId)?.kind === "qa"
+          ? input.memories.find((m: { id: string }) => m.id === job.incomingId).summary : "用户项目默认缓存 30 分钟。", reason: "同一属性重复",
       })) });
     } else {
       const input = JSON.parse(payload.messages.at(-1).content);
@@ -86,8 +90,25 @@ test("live adapter flow: merge with provenance, answer with evidence, and retain
     assert.ok(getStore().memories("split-test").every(m => m.sourceIds[0] === split.recordId));
     const splitEvidence = await retrieve("split-test", "学习", "sources");
     assert.equal(splitEvidence.context.length, 1);
-    await remember("split-test", "empty", "收到", []);
-    assert.deepEqual(getStore().stats("split-test", modelConfig().space), { hot: 2, cold: 0, records: 2 });
+    await remember("qa-test", "split", "ack", []);
+    const empty = await remember("qa-test", "empty", "收到", []);
+    assert.equal(empty.facts, 0);
+    assert.equal(empty.summaries, 1); assert.equal(empty.added, 1);
+    assert.match(empty.message, /生成 1 条问答摘要/);
+    assert.deepEqual(getStore().stats("qa-test", modelConfig().space), { hot: 3, cold: 0, records: 2 });
+    const qa = getStore().memories("qa-test").find(m => m.sourceIds.includes(empty.recordId))!;
+    assert.equal(qa.kind, "qa");
+    assert.equal(qa.summary, "用户询问编辑器推荐，助手建议 VS Code。");
+    assert.ok(embeddingInputs.includes(qa.summary));
+    assert.ok(embeddingInputs.every(text => !text.includes("问答记录（助手回答未验证）")));
+    const repeatedQA = await remember("qa-test", "empty", "收到", []);
+    assert.equal(repeatedQA.merged, 1);
+    assert.ok(getStore().memories("qa-test").filter(m => m.kind === "qa").every(m => !m.summary.includes("问答记录（助手回答未验证）")));
+    assert.equal(getStore().memories("qa-test", undefined, "hot").filter(m => m.kind === "qa").length, 1);
+    assert.ok(getStore().memories("qa-test", undefined, "hot").some(m => m.summary === "用户学习 React。"));
+    const fallback = await remember("qa-fallback", "empty-fallback", "建议先检查配置", []);
+    assert.equal(fallback.added, 1);
+    assert.match(getStore().memories("qa-fallback")[0].summary, /用户提问：empty-fallback；助手答复：建议先检查配置/);
     for (const [id, score] of [["distractor", 0.95], ["correct-property", 0.75]] as const) {
       getStore().saveRecord({ id, scope: "candidate-test", question: id, answer: "", context: "[]", createdAt: "2026-01-01T00:00:00Z" });
       getStore().saveMemory({ id, scope: "candidate-test", summary: id, vector: [score, Math.sqrt(1-score*score), 0],
@@ -108,7 +129,7 @@ test("live adapter flow: merge with provenance, answer with evidence, and retain
     assert.equal(batchSize, 2);
     assert.equal(batchReusesNewFacts, false);
     assert.equal(mergeCalls - beforeBatch, 1);
-    assert.deepEqual(getStore().stats("split-test", modelConfig().space), { hot: 2, cold: 4, records: 3 });
+    assert.deepEqual(getStore().stats("split-test", modelConfig().space), { hot: 2, cold: 4, records: 2 });
     chosenId = getStore().memories("split-test").find(m => m.status === "hot")!.id;
     const beforeCollision = mergeCalls;
     const collision = await remember("split-test", "split", "收到", []);
