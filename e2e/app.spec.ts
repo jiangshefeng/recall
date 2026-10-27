@@ -75,7 +75,7 @@ test("demo chat, provenance, merge, retrieval modes, and responsive layout", asy
   await page.getByLabel("输入问题").fill("项目 A 的缓存分别多久过期？");
   await page.getByRole("button", { name: "发送", exact: false }).click();
   await expect(page.locator(".message.assistant")).toHaveCount(2);
-  await expect(page.locator(".memory-note").last()).toContainText("已合并");
+  await expect(page.locator(".memory-note").last()).toContainText("合并 1 条");
   const after = await (await request.get(`/api/memories?scope=${scope}`)).json();
   expect(after.stats).toEqual({ hot: 5, cold: 4, records: 7 });
   const sources = await request.post("/api/search", { data: { scope, query: "项目 A 缓存过期", strategy: "sources" } });
