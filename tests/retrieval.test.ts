@@ -36,15 +36,72 @@ function retrieve(store: MemoryStore, options: Partial<RetrievalPolicy> = {}, st
   return retrieveFrom(store, "a", "model-a", query, strategy, 0.5, options);
 }
 
-test("first round is no longer fixed at 3; keeps at most 6 from 20 candidates", t => {
+test("default first round keeps at most three memories from twenty candidates", t => {
   const store = new MemoryStore(":memory:"); t.after(() => store.close());
   for (let i = 0; i < 25; i++) add(store, `hot-${i}`, 0.99 - i * 0.01);
   const result = retrieve(store);
   assert.equal(result.trace.firstCandidates, 20);
-  assert.equal(result.first.length, 6);
+  assert.equal(result.first.length, 3);
   assert.equal(result.trace.expanded, false);
   assert.equal(result.trace.reason, "enough-first-results");
   assert.equal(result.second.length, 0);
+});
+
+test("default weak matches expand to at most three more memories", t => {
+  const store = new MemoryStore(":memory:"); t.after(() => store.close());
+  for (let i = 0; i < 12; i++) add(store, `weak-hit-${i}`, 0.7 - i * 0.01);
+  const result = retrieve(store);
+  assert.equal(result.first.length, 3);
+  assert.equal(result.second.length, 3);
+  assert.equal(result.trace.reason, "few-strong-results");
+  assert.equal(result.records.length, 6);
+});
+
+test("one large event reads four recent candidates, sends only its newest two, and preserves all sources", t => {
+  const store = new MemoryStore(":memory:"); t.after(() => store.close());
+  const ids = Array.from({ length: 9 }, (_, i) => `event-${i + 1}`);
+  for (const [i, id] of ids.entries()) store.saveRecord({ ...original(id), createdAt: `2026-10-${String(i + 1).padStart(2, "0")}T00:00:00Z` });
+  store.saveRecord({ ...original("private-newest", "private", "private"), createdAt: "2026-11-01T00:00:00Z" });
+  store.saveMemory({ id: "large-event", scope: "a", space: "model-a", summary: "一个长期事件", vector: vector(0.95),
+    status: "hot", sourceIds: [...ids, "private-newest"], parentIds: [], reason: "test", createdAt: "2026-10-09T00:00:00Z" });
+  const recent = store.recentRecords.bind(store);
+  const loaded: string[][] = [];
+  store.recentRecords = (scope, sourceIds, limit) => {
+    const result = recent(scope, sourceIds, limit); loaded.push(result.map(r => r.id)); return result;
+  };
+  const result = retrieve(store, {}, "sources");
+  assert.deepEqual(loaded, [["event-9", "event-8", "event-7", "event-6"]]);
+  assert.deepEqual(result.records.map(r => r.id), ["event-9", "event-8"]);
+  assert.deepEqual(result.first[0].includedSourceIds, ["event-9", "event-8"]);
+  assert.equal(store.records("a").length, 9);
+  assert.equal(store.memories("a")[0].sourceIds.length, 10);
+  assert.ok(result.records.every(r => r.scope === "a"));
+  const four = retrieve(store, { sourceLimitPerMemory: 4 }, "sources");
+  assert.deepEqual(four.records.map(r => r.id), ["event-9", "event-8", "event-7", "event-6"]);
+});
+
+test("covered originals stay archived while the latest two deltas and the stage remain available", t => {
+  const store = new MemoryStore(":memory:"); t.after(() => store.close());
+  const ids = Array.from({ length: 9 }, (_, i) => `stage-event-${i + 1}`);
+  for (const [i, id] of ids.entries()) store.saveRecord({ ...original(id), createdAt: `2026-10-${String(i + 1).padStart(2, "0")}T00:00:00Z` });
+  add(store, "staged-event", 0.95, { sourceIds: ids, stage: { id: "stage", content: "前五条历史记录的阶段摘要", sourceIds: ids.slice(0, 5), createdAt: "2026-10-05T00:00:00Z" } });
+  const result = retrieve(store, {}, "sources");
+  assert.deepEqual(result.records.map(r => r.id), ["stage-event-9", "stage-event-8"]);
+  assert.equal(result.stages?.length, 1);
+  assert.equal(result.context.length, 3);
+  assert.equal(store.records("a").length, 9);
+  assert.equal(store.memories("a")[0].sourceIds.length, 9);
+});
+
+test("shared newest sources are not replaced with older history just to fill duplicate hits", t => {
+  const store = new MemoryStore(":memory:"); t.after(() => store.close());
+  const ids = ["r1", "r2", "r3", "r4"];
+  for (const [i, id] of ids.entries()) store.saveRecord({ ...original(id), createdAt: `2026-10-0${i + 1}T00:00:00Z` });
+  add(store, "event-a", 0.95, { sourceIds: ids });
+  add(store, "event-b", 0.9, { sourceIds: ids });
+  const result = retrieve(store, {}, "sources");
+  assert.deepEqual(result.records.map(r => r.id), ["r4", "r3"]);
+  assert.equal(result.first.length, 1);
 });
 
 test("two first-round hits trigger expansion; score is exactly 75% original plus 25% neighbor", t => {
@@ -102,7 +159,7 @@ test("merged summary with many originals obeys the total record limit and preven
   const store = new MemoryStore(":memory:"); t.after(() => store.close());
   add(store, "merged", 0.95, { sourceIds: Array.from({ length: 10 }, (_, i) => `source-${i}`) });
   add(store, "cold", 0.9, { status: "cold" });
-  const result = retrieve(store, { maxRecords: 3 });
+  const result = retrieve(store, { maxRecords: 3, sourceLimitPerMemory: 4 });
   assert.equal(result.records.length, 3);
   assert.equal(result.first.length, 1);
   assert.equal(result.first[0].includedSourceIds!.length, 3);
@@ -174,10 +231,13 @@ test("first/second rounds share the final record budget", t => {
 
 test("bad numeric settings fall back or clamp rather than disabling limits", () => {
   const policy = normalizePolicy({ firstCandidates: NaN, firstLimit: 1_000_000, maxRecords: -1,
-    maxEstimatedTokens: Infinity, strongScore: 8 });
+    maxEstimatedTokens: Infinity, strongScore: 8, sourceCandidatesPerMemory: 999, sourceLimitPerMemory: 999 });
   assert.equal(policy.firstCandidates, 20);
   assert.equal(policy.firstLimit, 20);
   assert.equal(policy.maxRecords, 1);
   assert.equal(policy.maxEstimatedTokens, 6000);
   assert.equal(policy.strongScore, 1);
+  assert.equal(policy.sourceCandidatesPerMemory, 4);
+  assert.equal(policy.sourceLimitPerMemory, 4);
+  assert.equal(normalizePolicy({ sourceCandidatesPerMemory: 1, sourceLimitPerMemory: 4 }).sourceLimitPerMemory, 1);
 });

@@ -131,6 +131,15 @@ export class MemoryStore {
     }));
     return ids ? mapped.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id)) : mapped;
   }
+  recentRecords(scope: string, ids: string[], limit: number): RecordEntry[] {
+    if (!ids.length) return [];
+    // Bound database reads before loading full text; JSON avoids one SQL variable per source ID.
+    const rows = this.db.prepare(`SELECT * FROM records
+      WHERE scope=? AND id IN (SELECT value FROM json_each(?))
+      ORDER BY created_at DESC, id ASC LIMIT ?`).all(scope, JSON.stringify(ids), limit);
+    return rows.map(row => ({ id: String(row.id), scope: String(row.scope), question: String(row.question),
+      answer: String(row.answer), context: String(row.context), createdAt: String(row.created_at) }));
+  }
   stats(scope: string, space: string) {
     const all = this.memories(scope, space);
     return { hot: all.filter(x => x.status === "hot").length,
@@ -138,7 +147,7 @@ export class MemoryStore {
   }
 }
 
-const STORE_SCHEMA_VERSION = 3;
+const STORE_SCHEMA_VERSION = 4;
 const globalStore = globalThis as unknown as { ragStore?: MemoryStore; ragStoreSchemaVersion?: number };
 export function getStore() {
   if (!globalStore.ragStore) {

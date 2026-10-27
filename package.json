@@ -11,6 +11,7 @@
     "test:live": "node --env-file=.env.local --import tsx scripts/verify-retrieval-live.ts",
     "test:extended": "node --env-file=.env.local --import tsx scripts/verify-rag-extended.ts",
     "test:compare": "node --env-file=.env.local --import tsx scripts/compare-memory.ts",
+    "test:locomo": "node --env-file=.env.local --import tsx scripts/evaluate-locomo.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

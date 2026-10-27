@@ -39,7 +39,7 @@ test("stage compression uses prior stage plus deltas for judgment and recompress
     const base = `http://127.0.0.1:${address.port}/v1`;
     Object.assign(process.env, { RAG_MODE: "live", LLM_BASE_URL: base, EMBEDDING_BASE_URL: base,
       LLM_API_KEY: "test", EMBEDDING_API_KEY: "test", LLM_MODEL: "test", EMBEDDING_MODEL: "test",
-      RAG_DB_PATH: join(dir, "memory.sqlite"), RAG_STAGE_SOURCE_THRESHOLD: "10", RAG_STAGE_CHAR_THRESHOLD: "12000" });
+      RAG_DB_PATH: join(dir, "memory.sqlite"), RAG_STAGE_SOURCE_THRESHOLD: "5", RAG_STAGE_CHAR_THRESHOLD: "12000" });
     const store = getStore(), space = modelConfig().space;
     const seed = (scope: string, n: number, answer = "确认") => {
       const sourceIds = Array.from({ length: n }, (_, i) => `${scope}-r${i}`);
@@ -47,15 +47,15 @@ test("stage compression uses prior stage plus deltas for judgment and recompress
       const m: Memory = { id: `${scope}-memory`, scope, space, sourceIds, parentIds: [], summary: "用户希望举例", vector: [1, 0], status: "hot", reason: "test", createdAt: "2026-01-01T00:00:00Z" };
       store.saveMemory(m); return m;
     };
-    const old = seed("count", 10);
+    const old = seed("count", 4);
     const original = store.records("count");
     const first = await remember("count", "以后不用例子，我要的时候会说", "收到", []);
     assert.equal(first.merged, 1); assert.equal(summaries, 1); assert.equal(merges, 1);
     let hot = store.memories("count", space, "hot")[0];
-    assert.equal(hot.stage?.sourceIds.length, 11);
+    assert.equal(hot.stage?.sourceIds.length, 5);
     const firstStageId = hot.stage!.id;
-    assert.equal(mergeInputs[0].originals.length, 11);
-    assert.equal(store.records("count").length, 11);
+    assert.equal(mergeInputs[0].originals.length, 5);
+    assert.equal(store.records("count").length, 5);
     assert.deepEqual(store.records("count", old.sourceIds), original);
     const evidence = await retrieve("count", "举例偏好", "expand");
     assert.equal(evidence.context.length, 1);
@@ -63,11 +63,11 @@ test("stage compression uses prior stage plus deltas for judgment and recompress
     assert.equal(evidence.records.length, 0);
     assert.equal(evidence.trace.usage.records, 1);
     assert.equal(store.stage("different", firstStageId), undefined);
-    assert.equal(store.stage("count", firstStageId)?.sourceIds.length, 11);
+    assert.equal(store.stage("count", firstStageId)?.sourceIds.length, 5);
     const next = await remember("count", "仍然按需给例子", "收到", []);
     assert.equal(next.merged, 1); assert.equal(merges, 2);
     hot = store.memories("count", space, "hot")[0];
-    assert.equal(hot.sourceIds.length, 12); assert.equal(hot.stage?.id, firstStageId);
+    assert.equal(hot.sourceIds.length, 6); assert.equal(hot.stage?.id, firstStageId);
     assert.equal(mergeInputs[1].originals.length, 1);
     assert.ok(mergeInputs[1].memories.some((m: any) => m.stage?.id === firstStageId));
     assert.ok(!JSON.stringify(mergeInputs[1]).includes(old.sourceIds[0]));
@@ -80,17 +80,17 @@ test("stage compression uses prior stage plus deltas for judgment and recompress
     const third = await remember("count", "现在改为始终举例", "收到", []);
     assert.equal(third.merged, 1); assert.equal(merges, 3);
     hot = store.memories("count", space, "hot")[0];
-    assert.equal(hot.sourceIds.length, 13); assert.equal(hot.stage?.sourceIds.length, 13);
+    assert.equal(hot.sourceIds.length, 7); assert.equal(hot.stage?.sourceIds.length, 7);
     assert.notEqual(hot.stage?.id, firstStageId);
     assert.equal(mergeInputs[2].originals.length, 2);
     assert.ok(mergeInputs[2].memories.some((m: any) => m.stage?.id === firstStageId));
     assert.ok(!JSON.stringify(mergeInputs[2]).includes(old.sourceIds[0]));
     assert.deepEqual(store.records("count", old.sourceIds), original);
-    process.env.RAG_STAGE_SOURCE_THRESHOLD = "10";
-    seed("failure", 10); omitStage = true;
+    process.env.RAG_STAGE_SOURCE_THRESHOLD = "5";
+    seed("failure", 4); omitStage = true;
     const failed = await remember("failure", "更新偏好", "收到", []);
     assert.equal(failed.action, "partial"); assert.equal(failed.merged, 0); assert.equal(merges, 4);
-    assert.deepEqual(store.stats("failure", space), { hot: 2, cold: 0, records: 11 });
+    assert.deepEqual(store.stats("failure", space), { hot: 2, cold: 0, records: 5 });
     omitStage = false;
     process.env.RAG_STAGE_CHAR_THRESHOLD = "500";
     seed("long", 1, "原始长文".repeat(300));
@@ -138,11 +138,27 @@ test("stage compression uses prior stage plus deltas for judgment and recompress
   }
 });
 
-test("exactly ten uncovered sources do not compress; raw length can trigger independently", () => {
-  const m: Memory = { id: "m", scope: "a", space: "a", sourceIds: Array.from({ length: 9 }, (_, i) => `r${i}`), parentIds: [], summary: "fact", vector: [1], status: "hot", reason: "", createdAt: "date" };
-  const n = { ...m, sourceIds: ["new"] };
-  const records: RecordEntry[] = [...m.sourceIds, "new"].map(id => ({ id, scope: "a", question: "fact", answer: "ok", context: "", createdAt: "date" }));
-  assert.equal(compressionPlan(m, n, records).required, false);
+test("compression starts at five uncovered sources; covered history does not count again", () => {
+  const env = { ...process.env };
+  delete process.env.RAG_STAGE_SOURCE_THRESHOLD;
+  delete process.env.RAG_STAGE_CHAR_THRESHOLD;
+  try {
+    const m: Memory = { id: "m", scope: "a", space: "a", sourceIds: [], parentIds: [], summary: "fact", vector: [1], status: "hot", reason: "", createdAt: "date" };
+    const ids = Array.from({ length: 10 }, (_, i) => `r${i}`);
+    const records: RecordEntry[] = ids.map(id => ({ id, scope: "a", question: "fact", answer: "ok", context: "", createdAt: "date" }));
+    const n = { ...m, sourceIds: [ids[4]] };
+    assert.equal(compressionPlan({ ...m, sourceIds: ids.slice(0, 3) }, { ...n, sourceIds: [ids[3]] }, records).required, false);
+    assert.equal(compressionPlan({ ...m, sourceIds: ids.slice(0, 4) }, n, records).required, true);
+    assert.equal(compressionPlan({ ...m, sourceIds: ids.slice(0, 5) }, { ...n, sourceIds: [ids[5]] }, records).required, true);
+    const staged = { ...m, sourceIds: ids.slice(0, 9), stage: { id: "stage", content: "archive", sourceIds: ids.slice(0, 5), createdAt: "date" } };
+    assert.equal(compressionPlan(staged, { ...n, sourceIds: [ids[8]] }, records).required, false);
+    assert.equal(compressionPlan(staged, { ...n, sourceIds: [ids[9]] }, records).required, true);
+    process.env.RAG_STAGE_CHAR_THRESHOLD = "500";
+    const long = [{ ...records[0], question: "x".repeat(600) }];
+    assert.equal(compressionPlan({ ...m, sourceIds: [ids[0]] }, { ...m, sourceIds: [] }, long).required, true);
+  } finally {
+    for (const key of Object.keys(process.env)) if (!(key in env)) delete process.env[key]; Object.assign(process.env, env);
+  }
 });
 
 test("legacy databases gain stage tables without changing original records", () => {

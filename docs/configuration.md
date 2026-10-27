@@ -20,7 +20,11 @@
 
 `.env.example` 显式写了两个接口地址，若要使用 Embedding 地址的代码回退，需要移除对应配置，而非原样保留示例地址。聊天与 Embedding 可以分别使用云端或本机服务，当前仍要求向量接口有非空密钥字段。
 
+聊天模型示例为 `qwen3.8-max`；更换聊天模型只需修改 `LLM_MODEL` 并重启服务，不需要更换本地 Embedding。免费 token 适用的模型、地域和有效期以供应商控制台为准；历史 Flash 测试的单价不能用于估算 Max 的费用。
+
 BASE_URL 不包含 `/chat/completions` 或 `/embeddings`。页面聊天要求服务支持 `stream: true`，返回 `text/event-stream` 的 `choices[].delta.content`；非流式 API 调用、事实提取和整理使用完整聊天 JSON。仅支持这些接口不代表所有供应商的额外鉴权、模型参数或结构化输出机制都已适配。
+
+多条摘要的向量请求使用 `input: string[]`，响应 `data` 应包含每个输入对应的向量；若提供 `index` 则按索引对应，否则按返回顺序对应。不支持批量或响应校验失败时自动回退为最多 3 个并发的逐条请求，不需要新增环境变量；逐条失败保留原文并提示 partial。查询向量和单条摘要仍使用字符串输入。
 
 ## 相关性与扩展
 
@@ -29,9 +33,9 @@ BASE_URL 不包含 `/chat/completions` 或 `/embeddings`。页面聊天要求服
 | `RAG_SEARCH_THRESHOLD` | **0.45** | live 首轮与二轮原问题 / 邻居相似度门槛 |
 | `RAG_MERGE_THRESHOLD` | **0.6** | live 整理候选门槛，每条事实最多 3 条候选 |
 | `RAG_FIRST_CANDIDATES` | 20 | 首轮评分候选上限 |
-| `RAG_FIRST_LIMIT` | 6 | 首轮最多选入的记忆数 |
+| `RAG_FIRST_LIMIT` | 3 | 首轮最多选入的记忆数 |
 | `RAG_NEIGHBORS_PER_SEED` | 5 | 每个首轮起点的邻居候选上限 |
-| `RAG_SECOND_LIMIT` | 6 | 第二轮最多选入的记忆数 |
+| `RAG_SECOND_LIMIT` | 3 | 第二轮最多选入的记忆数 |
 | `RAG_MIN_FIRST_RESULTS` | 3 | 首轮少于该数量且有预算时尝试扩展 |
 | `RAG_MIN_STRONG_RESULTS` | 2 | 首轮高分记忆少于该数量且有预算时尝试扩展 |
 | `RAG_STRONG_SCORE` | 0.75 | 首轮高分判定；同时不低于当前检索门槛 |
@@ -45,15 +49,19 @@ demo 固定使用检索门槛 0.08、重复摘要候选门槛 0.64，且每条�
 | 环境变量 | 默认值 | 作用 |
 | --- | --- | --- |
 | `RAG_MAX_RECORDS` | 12 | 两轮共用的证据数上限，每个阶段摘要也算一条 |
+| `RAG_SOURCE_CANDIDATES_PER_MEMORY` | 4 | 每条命中记忆最多读取的未覆盖原文候选，按时间倒序，范围1–4 |
+| `RAG_SOURCE_LIMIT_PER_MEMORY` | 2 | 从候选中默认选最近两条原文，范围1–4且不超过候选上限 |
 | `RAG_CONTEXT_MAX_CHARS` | 18000 | 实际历史证据 JSON 的字符上限 |
 | `RAG_CONTEXT_MAX_TOKENS` | 6000 | 同一 JSON 的估算 token 上限 |
 | `RAG_RECORD_MAX_CHARS` | 5000 | 每条证据正文的字符上限 |
-| `RAG_STAGE_SOURCE_THRESHOLD` | 10 | 未覆盖原文超过此数量时压缩 |
+| `RAG_STAGE_SOURCE_THRESHOLD` | 5 | 合并或覆盖时，未覆盖原文达到此数量即压缩 |
 | `RAG_STAGE_CHAR_THRESHOLD` | 12000 | 未覆盖完整记录序列化总字符数超过此值时压缩 |
 | `RAG_MERGE_INPUT_MAX_CHARS` | 64000 | 批量整理资料 JSON 字符上限 |
 | `RAG_MERGE_INPUT_MAX_TOKENS` | 20000 | 批量整理资料 JSON 估算 token 上限 |
 
 回答证据超限时允许带标记节选；批量整理资料超限时放弃本次整理、尽量保存独立事实并返回 partial。预算不是整个模型请求的上限；原文存储也不受这些发送预算裁剪。
+
+原文候选上限和选取上限仅控制本次检索，不截断 `sourceIds` 或删除旧原文。数据库按记录时间倒序、同时间按ID升序选候选，默认只提交最近两条；若它们已被其他命中引用，不为凑数补入更旧的原文。阶段已覆盖的来源不再作为原文候选，阶段摘要仍单独计入全局证据预算。压缩条数条件为大于等于阈值，默认恰好五条即触发；字符条件仍为超过12,000字符。
 
 阶段摘要最多 4,000 字符、事实最多 20 条且每条最多 700 字符。没有用户事实时，同一次提取调用生成一条最多 700 字符的问答摘要，继续生成向量和整理；类型单独保存，不添加固定前缀参与向量计算。近期对话最多 6 条、合并候选最多 3 条，目前写在代码与 schema 中，没有单独环境变量。阶段阈值与检索数量参数会做范围限制；请使用有效正整数，特别是合并资料预算。
 

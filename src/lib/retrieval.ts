@@ -4,7 +4,8 @@ import type { MemoryStore } from "./store";
 import type { Evidence, ExpansionReason, Hit, Memory, RetrievalMode, RetrievalPolicy } from "./types";
 
 export const DEFAULT_RETRIEVAL_POLICY: RetrievalPolicy = {
-  firstCandidates: 20, firstLimit: 6, neighborsPerSeed: 5, secondLimit: 6,
+  firstCandidates: 20, firstLimit: 3, neighborsPerSeed: 5, secondLimit: 3,
+  sourceCandidatesPerMemory: 4, sourceLimitPerMemory: 2,
   maxRecords: 12, maxContextChars: 18_000, maxEstimatedTokens: 6000, maxRecordChars: 5000,
   minFirstResults: 3, minStrongResults: 2, strongScore: 0.75,
 };
@@ -13,6 +14,7 @@ export function normalizePolicy(input: Partial<RetrievalPolicy> = {}): Retrieval
   const result = { ...DEFAULT_RETRIEVAL_POLICY };
   const limits: Record<Exclude<keyof RetrievalPolicy, "strongScore">, [number, number]> = {
     firstCandidates: [1, 100], firstLimit: [1, 20], neighborsPerSeed: [1, 20], secondLimit: [1, 20],
+    sourceCandidatesPerMemory: [1, 4], sourceLimitPerMemory: [1, 4],
     maxRecords: [1, 50], maxContextChars: [128, 100_000], maxEstimatedTokens: [32, 32_000],
     maxRecordChars: [64, 20_000], minFirstResults: [1, 20], minStrongResults: [1, 20],
   };
@@ -22,6 +24,7 @@ export function normalizePolicy(input: Partial<RetrievalPolicy> = {}): Retrieval
   }
   if (typeof input.strongScore === "number" && Number.isFinite(input.strongScore)) result.strongScore = Math.max(0, Math.min(1, input.strongScore));
   result.firstLimit = Math.min(result.firstLimit, result.firstCandidates);
+  result.sourceLimitPerMemory = Math.min(result.sourceLimitPerMemory, result.sourceCandidatesPerMemory);
   return result;
 }
 
@@ -29,6 +32,7 @@ export function retrievalPolicyFromEnv(): RetrievalPolicy {
   const keys: Record<keyof RetrievalPolicy, string> = {
     firstCandidates: "RAG_FIRST_CANDIDATES", firstLimit: "RAG_FIRST_LIMIT", neighborsPerSeed: "RAG_NEIGHBORS_PER_SEED",
     secondLimit: "RAG_SECOND_LIMIT", maxRecords: "RAG_MAX_RECORDS", maxContextChars: "RAG_CONTEXT_MAX_CHARS",
+    sourceCandidatesPerMemory: "RAG_SOURCE_CANDIDATES_PER_MEMORY", sourceLimitPerMemory: "RAG_SOURCE_LIMIT_PER_MEMORY",
     maxEstimatedTokens: "RAG_CONTEXT_MAX_TOKENS", maxRecordChars: "RAG_RECORD_MAX_CHARS",
     minFirstResults: "RAG_MIN_FIRST_RESULTS", minStrongResults: "RAG_MIN_STRONG_RESULTS", strongScore: "RAG_STRONG_SCORE",
   };
@@ -51,9 +55,10 @@ export function retrieveFrom(store: MemoryStore, scope: string, space: string, q
 
   const admit = (candidate: Memory & { score: number }, extras: Partial<Hit> = {}): Hit | undefined => {
     const includedSourceIds: string[] = [];
-    // Prefer newer sources when one summary has more originals than the available budget.
+    // Keep full provenance; fetch only recent uncovered candidates, then select the latest sources.
     const covered = new Set(candidate.stage?.sourceIds ?? []);
-    const originals = store.records(scope, candidate.sourceIds.filter(id => !covered.has(id))).sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
+    const originals = store.recentRecords(scope, candidate.sourceIds.filter(id => !covered.has(id)), policy.sourceCandidatesPerMemory)
+      .slice(0, policy.sourceLimitPerMemory);
     for (const record of originals) if (budget.add(record)) includedSourceIds.push(record.id);
     if (candidate.stage && budget.addStage(candidate.stage)) includedSourceIds.push(...candidate.stage.sourceIds);
     if (!includedSourceIds.length) return undefined;

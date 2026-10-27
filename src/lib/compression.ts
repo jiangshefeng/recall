@@ -10,7 +10,7 @@ export function compressionPlan(previous: Memory, incoming: Memory, records: Rec
   const pending = records.filter(r => sourceIds.includes(r.id) && !covered.has(r.id));
   const chars = pending.reduce((sum, r) => sum + JSON.stringify(r).length, 0);
   return { sourceIds, pending: pending.length, chars,
-    required: pending.length > limit("RAG_STAGE_SOURCE_THRESHOLD", 10, 1, 100) ||
+    required: pending.length >= limit("RAG_STAGE_SOURCE_THRESHOLD", 5, 1, 100) ||
       chars > limit("RAG_STAGE_CHAR_THRESHOLD", 12000, 500, 500000) };
 }
 

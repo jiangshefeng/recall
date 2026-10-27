@@ -15,6 +15,8 @@ test("live adapter flow: merge with provenance, answer with evidence, and retain
   let broken: "none" | "merge" | "summary" = "none";
   let calls = 0;
   const embeddingInputs: string[] = [];
+  const embeddingBatches: string[][] = [];
+  let failEmbeddingText: string | undefined;
   let chosenId: string | undefined;
   let comparedIds: string[] = [];
   let mergeCalls = 0;
@@ -29,7 +31,12 @@ test("live adapter flow: merge with provenance, answer with evidence, and retain
     res.setHeader("Content-Type", "application/json");
     if (req.headers.authorization !== "Bearer local-test") { res.writeHead(401); res.end("{}"); return; }
     calls++;
-    if (req.url === "/v1/embeddings") { embeddingInputs.push(payload.input); res.end(JSON.stringify({ data: [{ embedding: [1, 0, 0] }] })); return; }
+    if (req.url === "/v1/embeddings") {
+      const inputs: string[] = Array.isArray(payload.input) ? payload.input : [payload.input];
+      embeddingInputs.push(...inputs); embeddingBatches.push(inputs);
+      if (inputs.includes(failEmbeddingText!)) { res.writeHead(500); res.end("{}"); return; }
+      res.end(JSON.stringify({ data: inputs.map((_, index) => ({ index, embedding: [1, 0, 0] })).reverse() })); return;
+    }
     const system = payload.messages[0].content as string;
     let content: string;
     if (system.includes("提炼当前问答")) {
@@ -84,8 +91,11 @@ test("live adapter flow: merge with provenance, answer with evidence, and retain
     assert.deepEqual(getStore().stats("live-test", modelConfig().space), { hot: 2, cold: 2, records: 4 });
     assert.ok(calls >= 10);
     broken = "none";
+    const beforeSplitVectors = embeddingBatches.length;
     const split = await remember("split-test", "split", "收到", []);
     assert.equal(split.action, "added");
+    assert.equal(embeddingBatches.length - beforeSplitVectors, 1);
+    assert.equal(embeddingBatches.at(-1)!.length, 2);
     assert.deepEqual(getStore().stats("split-test", modelConfig().space), { hot: 2, cold: 0, records: 1 });
     assert.ok(getStore().memories("split-test").every(m => m.sourceIds[0] === split.recordId));
     const splitEvidence = await retrieve("split-test", "学习", "sources");
@@ -124,11 +134,13 @@ test("live adapter flow: merge with provenance, answer with evidence, and retain
     assert.equal((await remember("candidate-test", "unknown chosen ID", "ack", [])).action, "partial");
     chosenId = undefined;
     const beforeBatch = mergeCalls;
+    const beforeMergeVectors = embeddingBatches.length;
     const batch = await remember("split-test", "split", "收到", []);
     assert.equal(batch.merged, 2);
     assert.equal(batchSize, 2);
     assert.equal(batchReusesNewFacts, false);
     assert.equal(mergeCalls - beforeBatch, 1);
+    assert.deepEqual(embeddingBatches.slice(beforeMergeVectors).map(inputs => inputs.length), [2, 2]);
     assert.deepEqual(getStore().stats("split-test", modelConfig().space), { hot: 2, cold: 4, records: 2 });
     chosenId = getStore().memories("split-test").find(m => m.status === "hot")!.id;
     const beforeCollision = mergeCalls;
@@ -144,6 +156,26 @@ test("live adapter flow: merge with provenance, answer with evidence, and retain
     assert.equal(failedBatch.added, 2);
     assert.equal(failedBatch.merged, 0);
     assert.equal(failedBatch.action, "partial");
+    broken = "none";
+    failEmbeddingText = "用户学习 React。";
+    const partialVectors = await remember("partial-vectors", "split", "收到", []);
+    assert.equal(partialVectors.action, "partial"); assert.equal(partialVectors.added, 1);
+    assert.deepEqual(getStore().stats("partial-vectors", modelConfig().space), { hot: 1, cold: 0, records: 1 });
+    assert.equal(getStore().memories("partial-vectors")[0].summary, "用户计划下月寻找实习。");
+    failEmbeddingText = "用户项目默认缓存 30 分钟。";
+    const beforeVectorFailure = getStore().stats("split-test", modelConfig().space);
+    const mergeVectorFailure = await remember("split-test", "split", "收到", []);
+    assert.equal(mergeVectorFailure.action, "partial");
+    assert.equal(mergeVectorFailure.merged, 0); assert.equal(mergeVectorFailure.added, 2);
+    assert.deepEqual(getStore().stats("split-test", modelConfig().space), {
+      hot: beforeVectorFailure.hot + 2, cold: beforeVectorFailure.cold, records: beforeVectorFailure.records + 1,
+    });
+    failEmbeddingText = undefined;
+    const historical = await remember("historical-date", "时间测试", "已记录", [], { recordedAt: "2023-05-08T13:56:00Z" });
+    assert.equal(getStore().records("historical-date", [historical.recordId])[0].createdAt, "2023-05-08T13:56:00.000Z");
+    assert.ok(getStore().memories("historical-date").every(m => m.createdAt === "2023-05-08T13:56:00.000Z"));
+    await assert.rejects(remember("historical-invalid", "时间测试", "已记录", [], { recordedAt: "invalid" }), RangeError);
+    assert.equal(getStore().records("historical-invalid").length, 0);
   } finally {
     const globalStore = globalThis as unknown as { ragStore?: { close(): void } };
     globalStore.ragStore?.close(); delete globalStore.ragStore;

@@ -52,7 +52,7 @@ test("retrieval isolates scopes/models, removes duplicate second-hop hits and pr
     assert.equal(expanded.records.length, 4);
     const direct = retrieveFrom(store, "a", "test", [1, 0], "sources", 0.5);
     assert.equal(direct.second.length, 0);
-    assert.equal(direct.records.length, 4);
+    assert.equal(direct.records.length, 3);
   } finally { store.close(); }
 });
 
@@ -92,8 +92,10 @@ test("successive merges flatten all source IDs and retrieval never reads cold su
   assert.equal(reads, 1);
   assert.deepEqual(result.first.map(m => m.id), [final.id]);
   assert.equal(result.second.length, 0);
-  assert.deepEqual(result.records.map(r => r.id).sort(), ["one", "three", "two"]);
-  assert.equal(result.context.length, 3);
+  assert.deepEqual(result.records.map(r => r.id), ["one", "three"]);
+  assert.equal(result.context.length, 2);
+  assert.deepEqual(result.first[0].sourceIds, ["one", "two", "three"]);
+  assert.equal(store.records("a").length, 3);
 });
 test("SQLite records and vectors survive reopening the database", () => {
   const dir = mkdtempSync(join(tmpdir(), "rag-test-"));

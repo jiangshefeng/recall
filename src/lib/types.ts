@@ -39,6 +39,8 @@ export type RetrievalPolicy = {
   firstLimit: number;
   neighborsPerSeed: number;
   secondLimit: number;
+  sourceCandidatesPerMemory: number;
+  sourceLimitPerMemory: number;
   maxRecords: number;
   maxContextChars: number;
   maxEstimatedTokens: number;

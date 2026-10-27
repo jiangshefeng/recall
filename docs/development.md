@@ -37,7 +37,9 @@ npm run build
 npm run test:e2e
 ```
 
-单元与集成测试覆盖相似度、冷热迁移、来源保存、并发旧状态检查、空间隔离、检索预算、阶段压缩、四种整理操作、上下文去重、纯提问的问答摘要兜底与事实隔离、开发热更新补建表，以及 SSE 的 UTF-8 分块、增量到达与中断不入库。模拟 HTTP 模型用来验证协议和流程，不证明任何真实模型的普遍语义准确性。
+单元与集成测试覆盖相似度、冷热迁移、来源保存、并发旧状态检查、空间隔离、检索预算、阶段压缩、四种整理操作、上下文去重、纯提问的问答摘要兜底与事实隔离、开发热更新补建表、向量批量请求与乱序索引映射、异常批次的有限并发回退和部分成功，以及 SSE 的 UTF-8 分块、增量到达与中断不入库。模拟 HTTP 模型用来验证协议和流程，不证明任何真实模型的普遍语义准确性。
+
+`tests/merge-protocol.test.ts` 另外覆盖逐项校验后的实际部分入库、重复/未知/缺失 ID、JSON 与字段错误区分、length 结束原因，以及日志不含模型原文或密钥。合并校验错误通过写入结果的 diagnostics 和服务日志 memory_merge_validation 排查；不会因此追加模型调用。无需新增环境配置。
 
 浏览器测试默认通过 Playwright 使用已安装的 Microsoft Edge，自动启动 3100 端口 demo 服务，使用 `.next-e2e` 输出目录及 `data/e2e-rag.sqlite`。覆盖聊天、左右消息布局、流式增量显示、记忆面板开关、原文归档、预算展示与移动端。不会使用默认的 `data/rag.sqlite`；截图等产物写入 `artifacts/`。
 
@@ -62,10 +64,17 @@ npm run test:e2e
 | `npm run test:live` | 检索、预算与回答引用检查；内存数据库，报告 `artifacts/retrieval-live-check.json` |
 | `npm run test:extended` | 多条合成事实写入与查询；数据库 / 报告位于 `artifacts/extended-rag/` |
 | `npm run test:compare` | 15 题各测两次，对比最近 6 条聊天与同样聊天加动态记忆；独立数据库、完整证据及回答位于 `artifacts/memory-comparison-*/` |
+| `npm run test:locomo` | 完整 LoCoMo 对话导入和默认 40 题的原文 / 动态记忆对照；独立数据库和报告位于 `artifacts/locomo-pilot-conv26-v2/`，见 [LoCoMo 说明](locomo.md) |
 | `node --env-file=.env.local --import tsx scripts/verify-stage-live.ts` | 初次压缩、增量合并和再次压缩；使用 `artifacts/stage-live-*/` 独立数据库 |
 | `node --env-file=.env.local --import tsx scripts/verify-operations-live.ts` | 合并、覆盖、撤回与新增；使用 `artifacts/operations-live-*/` 独立数据库 |
 | `node --env-file=.env.local --import tsx scripts/verify-stream-live.ts` | 真实 SSE 增量、完成事件、完整回答入库与纯提问的热区摘要兜底；使用 `artifacts/stream-live-*/` 独立数据库 |
 | `node --env-file=.env.local --import tsx scripts/verify-forget-prompt.ts <原A/B报告目录>` | 重放原报告中含旧取件码与撤回要求的证据，测试不复述、明确恢复、新值、普通更新和后续提取；使用 `artifacts/forget-prompt-*/` 独立数据库 |
+| `node --env-file=.env.local --import tsx scripts/verify-merge-protocol.ts` | 使用已冻结的公开评测任务，对比修改前/后合并协议；不修改数据库，结果位于 `artifacts/merge-protocol-ab/`，新增费用预算上限1.6元 |
+| `node --env-file=.env.local --import tsx scripts/verify-merge-reason.ts` | 第一轮结束后，复用其修改前响应，补测最终80字符单句理由提示词；与第一轮共用1.6元总预算，不修改数据库 |
+
+合并协议脚本需要事先存在的 cases.json（含原版请求）；不能在修改后重新运行 capture-merge-cases.ts 覆盖基准。样本候选由之前失败轮次和最终快照重建，并非原失败请求的精确重放或完整 LoCoMo 问答复测。脚本交替请求顺序，两组均关闭 thinking，以同一输入比较整批格式通过率、保留决策数与可执行计划数；这些指标不等于回答准确率。按输入0.8元/百万、输出2.7元/百万 token 估费，每对预留保守上界，不够一对时停止；费率只适用于这次指定模型，换模型应先修改费率。每次响应与 usage 单独保存，仅含公开评测数据。中断后若存在未完成对，不自动重跑；同一记账文件会保留已花费用。可设置 MERGE_AB_MAX_PAIRS 限制累计对数，完整对结束后重跑会接续，仍共享1.6元总预算。
+
+初版协议已通过快照固定；提示词变化时第一轮脚本拒绝继续追加新样本，避免混合版本。短理由补测单独记账为 results-short-reason.json，报告 comparison-short-reason.md；它复用第一轮修改前及修复初版的响应，最终版请求在上一轮后发送，不再声称两组交替调用。若预算不足，报告仅比较已完成的同一组任务。
 
 单次模型检查通过，只代表该组模型、提示词与样本通过。真实模型行为会变化，不将测试样例当作固定准确率承诺。
 

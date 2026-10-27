@@ -23,6 +23,7 @@ test("a globally cached legacy store gains new methods and audit tables without 
     const updated = getStore();
     assert.equal(updated, old);
     assert.deepEqual(updated.records("a"), [record]);
+    assert.deepEqual(updated.recentRecords("a", [record.id], 4), [record]);
     assert.equal(updated.memories("a")[0].kind, "fact");
     updated.saveMemory({ ...memory, id: "qa", kind: "qa", summary: "用户询问排序方法，助手介绍二分查找。" });
     assert.equal(updated.memories("a").find(m => m.id === "qa")?.kind, "qa");
