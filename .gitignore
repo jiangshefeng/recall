@@ -1,0 +1,12 @@
+node_modules/
+.next/
+.next-e2e/
+.env*
+!.env.example
+data/
+*.tsbuildinfo
+*.log
+artifacts/
+test-results/
+playwright-report/
+tools/
