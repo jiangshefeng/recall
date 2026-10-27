@@ -44,6 +44,25 @@ npm run test:locomo -- --sample conv-26 --questions 199 --extend-from artifacts/
 
 补测不改变原系统参数，全部题目得分按实际题型数量加权；各类题数不相等，不能直接把与原来每类 8 题的总分变化解释成系统改善。应另外查看新增题成绩，并仍然注明只测一段对话。
 
+### 新配置的 DeepSeek 三组对照
+
+`scripts/run-locomo-campaign.ts` 固定使用 `deepseek-v4-pro-0813`，只覆盖评测进程的模型，不改生产配置。动态使用正式建库、3+3检索、每条最多4个原文候选且默认送最近2条、完整原文关联保留、未覆盖原文达到5条触发阶段压缩。普通组共用原文分块和本地查询向量，分别Top3和Top6。回答提示词与之前小测相同，temperature=0、关闭thinking，查询答案不写回。
+
+在任何批次调用前固定样本顺序和两种前缀的题号：剩余不少于30万token时选前两次完整会话，18万至30万时选第一次完整会话，更少时停止新建库，改用已完成问题的冻结证据做至多四轮重复回答。选择只依赖数据范围和预算，不依赖预测得分。三组完整答题组不足预算时停止，失败或缺失usage停止且保留预留，不自动重试。每个独立批次从头建库，原生产数据库不修改。
+
+输出在 `artifacts/locomo-deepseek-v4-pro-0813-3plus3/`：`plan.json` 记录固定规则和题号，`runs.json` 记录实际批次及分配预算，每批 `report.json` 保存原始答案、证据、请求用量和源码哈希。所有批次、微型预检、建库和重复回答共用100万输入加输出token上限；脚本不读取百炼实时余额，以用户提供的模型额度为前提，实际抵扣以控制台为准。单批脚本也可独立使用，但跨批预算必须由控制脚本分配，不能为每个批次重复分配100万。
+
+```powershell
+$env:LLM_MODEL='deepseek-v4-pro-0813'
+# 首次运行一次；若已有preflight.json，先检查其状态，不能重复未知扣费请求。
+node --env-file=.env.local --import tsx scripts/preflight-locomo-model.ts
+node --env-file=.env.local --import tsx scripts/run-locomo-campaign.ts
+# 本地评分，不调用云端；可在批次之间或全部结束后执行：
+node --import tsx scripts/render-locomo-campaign.ts
+```
+
+离线评分仍用原官方函数，输出 `summary.json`、`comparison.md` 及逐题分数；只汇总三组完整的共同题，重复题不增加独立题数。短前缀的普通Top6可能接近全文，没有覆盖完整长期记忆。部分题此前使用其他模型测过；本轮同时改变模型和检索配置，不能把跨轮分数变化直接归因于参数修改，也不能把F1称为正确率。
+
 ## 评分
 
 ### 普通 RAG 对照与免费 token 小测
