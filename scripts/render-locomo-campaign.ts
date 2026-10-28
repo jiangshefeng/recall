@@ -8,6 +8,7 @@ const root = resolve(process.env.LOCOMO_CAMPAIGN || "artifacts/locomo-deepseek-v
 const python = process.env.LOCOMO_PYTHON || "C:/Users/Administrator/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe";
 const read = (p: string) => JSON.parse(readFileSync(p, "utf8"));
 const plan = read(resolve(root, "plan.json")), runs = read(resolve(root, "runs.json"));
+const full = plan.scope === "full";
 const arms = ["dynamic", "raw3", "raw"] as const;
 type Arm = typeof arms[number];
 type Score = { index: number; category: number; score: number; question: string; gold: string | number; answer: string };
@@ -49,6 +50,10 @@ const repeated = repeat ? scoreThree(repeat, resolve(root, "repeat")) : [];
 const preflight = read(resolve(root, "preflight.json"));
 const requests = [...reports.flatMap((r: any) => r.report.requests), ...(repeat?.requests || [])].filter((r: any) => r.kind === "chat");
 const chargedTokens = preflight.attempt.chargedTokens + sum(requests.map((r: any) => r.chargedTokens));
+const knownTokens = preflight.attempt.chargedTokens + sum(requests.map((r: any) => r.totalTokens || 0));
+const setupPath = resolve(root, "setup-attempts.json");
+const setupAttempts = existsSync(setupPath) ? read(setupPath) : [];
+const setupReserved = sum(setupAttempts.map((r: any) => r.reservedTokens));
 assert.ok(chargedTokens <= plan.tokenCap);
 const phases = [...new Set(requests.map((r: any) => r.phase))].map(phase => {
   const subset = requests.filter((r: any) => r.phase === phase);
@@ -63,9 +68,11 @@ const repeatMetrics = [...new Set(repeated.map(r => r.repetition))].map(repetiti
 });
 const partialDetails = reports.flatMap((r: any) => r.report.ingestion.filter((x: any) => x.action === "partial").map((x: any) => ({ sample: r.sample, id: x.id, message: x.message, diagnostics: x.diagnostics })));
 const summary = { model: plan.model, generatedAt: new Date().toISOString(), unique: metrics(rows), bySample, repeatTriplets: repeated.length, repeatMetrics, partialDetails,
-  chargedTokens, tokenCap: plan.tokenCap, remainingTokens: plan.tokenCap - chargedTokens, phases, preflightTokens: preflight.attempt.chargedTokens,
+  chargedTokens, knownTokens, unresolvedReservationTokens: chargedTokens - knownTokens,
+  setupAttempts, setupReserved, totalIncludingSetupReservations: chargedTokens + setupReserved,
+  tokenCap: plan.tokenCap, remainingTokens: plan.tokenCap - chargedTokens, phases, preflightTokens: preflight.attempt.chargedTokens,
   abnormalRequests: requests.filter((r: any) => r.status !== "ok"), requestsWithoutUsage: requests.filter((r: any) => r.totalTokens === undefined).length,
-  limitation: "Short continuous prefixes; not full LoCoMo. F1 is not accuracy. Model and retrieval both changed versus previous Qwen tests. Repeats excluded from unique scores." };
+  limitation: full ? "Complete selected conversations, not all ten LoCoMo conversations. Some data was used before; not held out. F1 is not accuracy. New code and model; no causal attribution across historical runs." : "Short continuous prefixes; not full LoCoMo. F1 is not accuracy. Model and retrieval both changed versus previous Qwen tests. Repeats excluded from unique scores." };
 writeFileSync(resolve(root, "summary.json"), JSON.stringify(summary, null, 2));
 const table = (m: ReturnType<typeof metrics>) => `| ${m.questions}（F1 ${m.f1Questions}） | ${pct(m.f1.dynamic)} | ${pct(m.f1.raw3)} | ${pct(m.f1.raw)} |`;
 const names = ["多跳", "时间", "开放域", "单事实", "对抗题弃答规则分"];
@@ -75,20 +82,22 @@ const lines = ["# LoCoMo 三组对照：3+3 / 最近2条 / 阶段阈值5", "", `
   "| 对话 | 完整会话数 | 原文条数 / 块数 | 独立题数 | 动态 F1 | Top3 F1 | Top6 F1 |", "|---|---:|---:|---:|---:|---:|---:|",
   ...bySample.map((r: any) => `| ${r.sample} | ${r.sessions} | ${r.turns} / ${r.chunks} | ${r.questions} | ${pct(r.f1.dynamic)} | ${pct(r.f1.raw3)} | ${pct(r.f1.raw)} |`), "",
   "| 类型 | 题数 | 动态 | Top3 | Top6 |", "|---|---:|---:|---:|---:|", ...summary.unique.categories.map(c => `| ${names[c.category - 1]} | ${c.n} | ${pct(c.scores.dynamic)} | ${pct(c.scores.raw3)} | ${pct(c.scores.raw)} |`), "",
-  `已计入 ${chargedTokens.toLocaleString("en-US")} / ${plan.tokenCap.toLocaleString("en-US")} token，包括建库、回答、预检及重复测试。实际免费额度抵扣以百炼控制台为准。`, "",
+  `已计入 ${chargedTokens.toLocaleString("en-US")} / ${plan.tokenCap.toLocaleString("en-US")} token，包括建库、回答、预检及重复测试。实际计费和额度抵扣以所用服务商后台为准。`, "",
+  `其中服务端明确返回的用量为 ${knownTokens.toLocaleString("en-US")} token，未取得usage的保守预留为 ${(chargedTokens - knownTokens).toLocaleString("en-US")} token，后者不代表实际扣费。此前独立连通性失败另留 ${setupReserved.toLocaleString("en-US")} token预留，连同本轮合计 ${(chargedTokens + setupReserved).toLocaleString("en-US")}；这些失败记录不计入答题分数。`, "",
   "| 阶段 | 请求数 | 输入 token | 输出 token | 计入预算 |", "|---|---:|---:|---:|---:|", `| 独立接口预检 | 1 | ${preflight.attempt.promptTokens} | ${preflight.attempt.completionTokens} | ${preflight.attempt.chargedTokens} |`, ...phases.map(p => `| ${p.phase} | ${p.calls} | ${p.input} | ${p.output} | ${p.charged} |`), "",
   ...bySample.map((r: any) => `- ${r.sample}：${r.status}，完成 ${r.questions}/${r.plannedQuestions} 题；partial ${r.partials} 条，活动阶段摘要 ${r.stages ?? "尚未统计"}。`),
   `- 异常聊天请求 ${summary.abnormalRequests.length}；未取得用量的请求 ${summary.requestsWithoutUsage}。`, "",
-  "partial并非接口报错：前两批5条导入存在模型返回无效候选编号，相关操作被拦截并保留原文；第三批2条是多个事实选择同一个旧目标，冲突事实保留独立摘要。完整诊断见summary.json的partialDetails。唯一活动阶段摘要覆盖5条原文，完整关联仍保留。", "",
+  `partial写入共${partialDetails.length}条，包含格式/候选校验拦截或多事实目标冲突等保护性回退；完整原因逐条保存在summary.json的partialDetails，原文关联保留。`, "",
   "## 重复回答（单列）", "", `共 ${repeated.length} 道重复三组对照，复用固定证据，不重新建库，不增加独立题数。`, "",
   ...repeatMetrics.map(r => `- 第${r.repetition}轮 ${r.questions} 题：动态 ${pct(r.f1.dynamic)}，Top3 ${pct(r.f1.raw3)}，Top6 ${pct(r.f1.raw)}；相同子集首次分别 ${pct(r.originalSameSubset.f1.dynamic)}、${pct(r.originalSameSubset.f1.raw3)}、${pct(r.originalSameSubset.f1.raw)}。`), "",
   "## 测试范围与限制", "",
-  "每批从头建独立动态库和普通原文库，不写生产数据库。动态检索3+3，每条记忆最多4个原文候选、默认送最近2条，完整关联保留；未被阶段摘要覆盖的原文达到5条触发阶段压缩。普通组1400字符分块，重叠一条完整发言，单轮向量Top3/Top6，无摘要和二跳。三组聊天模型、回答提示词、temperature=0、关闭thinking和最终证据预算一致；动态原文可带前6条上下文。", "",
-  "按预先固定的会话顺序和参考证据范围选题，没有按预测成绩删题。只取短历史前缀，原文块少，Top6可能接近全文；不能代表长历史或全量LoCoMo。部分题在之前的Qwen测试中用过。本次同时换了模型和检索配置，不能将跨轮分数变化直接归因于参数修改。官方词匹配F1受数字、词形、额外名字影响，上游参考证据也可能有误，需结合原始答案阅读。", "",
-  "## 具体失分与评分案例", "",
+  "每批从头建独立动态库和普通原文库，不写生产数据库。动态检索3+3，每条记忆最多4个原文候选、默认送最近2条，完整关联保留；未被阶段摘要覆盖的原文达到5条触发阶段压缩。普通组1400字符分块，重叠一条完整发言，单轮向量Top3/Top6，无摘要和二跳。三组聊天模型、回答提示词和最终证据预算一致；动态原文可带前6条上下文。", "",
+  full ? `本轮使用Responses接口，三组reasoning.effort=${plan.reasoningEffort}，不发送temperature；固定目标为三段完整会话的全部599道官方原题，目前完成${rows.length}道完整三组对照，未按成绩删题。全部库按本轮记忆源码从空库建立，未复用旧摘要；传输层续跑迁移在各report的recoveries中记录，不改变记忆逻辑。限流拒绝及部分写入仍纳入运行记录。部分数据曾用于调试或旧评测，不是严格未见验证集。只覆盖全部10段会话中的3段，不能称为全量LoCoMo。` : "按预先固定的会话顺序和参考证据范围选题，没有按预测成绩删题。三组temperature=0、关闭thinking。只取短历史前缀，原文块少，Top6可能接近全文；不能代表长历史或全量LoCoMo。", "",
+  "本次同时换了模型和检索配置，不能将跨轮分数变化直接归因于参数修改。官方词匹配F1受数字、词形、额外名字影响，上游参考证据也可能有误，需结合原始答案阅读。", "",
+  ...(!full ? ["## 具体失分与评分案例", "",
   "- conv-48 题18（Seraphim在哪里买）：原文D2:24是“I bought it a year ago in Paris.”，本轮存储的摘要为“Jolene bought the item being discussed a year ago in Paris.”，缺少Seraphim实体名。该问的动态证据没有包含这条原文，动态弃答，普通组回答France。这说明代词未消解、摘要缺少可检索实体是实际问题；不能单凭此例将失分归因于最近2条上限。",
   "- conv-48 题17（何时购买Seraphim）：动态证据的历史上下文中实际上包含“a year ago in Paris”，但回答成会话日期January 27, 2023；普通组回答January 2022。这里还存在模型对相对时间的读取错误。",
-  "- conv-48 题12：动态回答January 26, 2023得1分，普通两组回答2023-01-26得0分，日期相同，差异来自官方词匹配评分。题6三组都提到pendant，但参考仅为pendants，额外描述拉低分数。保留官方原分，同时避免把所有分差解读成事实正确性差异。", "",
+  "- conv-48 题12：动态回答January 26, 2023得1分，普通两组回答2023-01-26得0分，日期相同，差异来自官方词匹配评分。题6三组都提到pendant，但参考仅为pendants，额外描述拉低分数。保留官方原分，同时避免把所有分差解读成事实正确性差异。", ""] : []),
   "## 逐题结果", ""];
 for (const r of rows) lines.push(`### ${r.sample} · 题 ${r.originalIndex}`, "", r.scores.dynamic.question, "", `参考：${r.scores.dynamic.gold}`, "", ...arms.flatMap(a => [`${a === "dynamic" ? "动态" : a === "raw3" ? "普通 Top3" : "普通 Top6"}：${r.scores[a].answer}（${pct(r.scores[a].score)}）`, ""]));
 writeFileSync(resolve(root, "comparison.md"), lines.join("\n"));

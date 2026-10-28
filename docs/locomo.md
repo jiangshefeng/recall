@@ -65,6 +65,26 @@ node --import tsx scripts/render-locomo-campaign.ts
 
 ## 评分
 
+### 当前源码重新建库的完整长会话对照
+
+`scripts/run-locomo-full.ts` 固定选择conv-26、conv-49、conv-50的全部官方原题，分别199、196、204题，共599道不同问题、1,496条原始发言。每段完整历史都从头调用当前生产remember建库，创建独立SQLite文件；不复制旧库、旧摘要或旧答案。普通组从同一原始发言重新生成1400字符分块，本地Embedding后分别Top3和Top6。每段完成建库后答其全部原题，查询答案不写回。
+
+当前使用配置中的Responses模型，三组相同reasoning强度、回答提示词和证据预算，不发送模型未声明支持的temperature。Responses协议先用小请求验证，评测预检最多64输出token。正式manifest记录API类型、推理参数、源数据与当前实现源码哈希。固定选题后不能按成绩调参并仍声称独立验证。
+
+控制脚本串行运行独立会话任务，每个任务拥有独立数据库和预分配预算；合计3,000万输入加输出token是防止失控的上限，并非要消耗到此值。每题先为完整三组回答预留预算，不足则保存已有结果。只有明确返回gateway_concurrency_limit且输出为空的Responses拒绝才退避重试，最多三次；每次失败及未知用量预留照常保留。其他接口失败或缺少用量停止对应任务，不自动重复未知扣费请求。当前输出默认在 `artifacts/locomo-sub2api-gpt61-fresh-599-v2/`，旧的连通性试错记录保留在独立目录。
+
+`scripts/recover-locomo-transport.ts`可在任务停止后，显式迁移仅评测传输代码改变的检查点：必须提供输出目录和原评测脚本哈希，其他核心源码必须完全一致；原报告先归档，迁移和明确限流拒绝记录保留，不重写已完成建库操作。它不允许用新记忆逻辑续用旧库。最初的并发尝试及后续串行执行也保留在计划归档中。
+
+```powershell
+# 新评测先做一次连通性探针；已有响应文件时先检查，避免重复请求。
+node --env-file=.env.local --import tsx scripts/probe-sub2api.ts
+# 默认读取 artifacts/responses-provider-probe/responses.json 的实际用量；
+# 使用其他探针目录时设置 LOCOMO_RESPONSES_PROBE 为对应 responses.json 路径。
+node --env-file=.env.local --import tsx scripts/run-locomo-full.ts
+```
+
+每个会话完成后自动调用离线官方评分，更新comparison.md与summary.json，长会话分组、分类分数和完整逐题答案都保留。会话之间评分串行，报告使用临时文件原子替换，允许另一个会话继续运行时读取。这个范围是10段官方会话中的3段，不是全量LoCoMo；部分数据用于过往调试或测试，不能声称严格未见验证集。F1不是人工正确率。
+
 ### 普通 RAG 对照与免费 token 小测
 
 `scripts/evaluate-locomo-small.ts` 为独立试测：固定 `conv-48` 前两次完整会话（50条发言），选择全部参考证据均在该范围内的20道前四类题，以及事先均匀抽取的5道对抗题。选择仅依据范围和类别，不依据预测分数；此前合并诊断使用的 conv-26 不用于本轮。它不是完整对话或全量 LoCoMo。

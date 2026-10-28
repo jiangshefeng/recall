@@ -3,6 +3,7 @@ import { demoEmbedding } from "./similarity";
 import type { Turn } from "./types";
 import { readSSE } from "./sse";
 import { parseStructured } from "./structured-output";
+import { readResponses } from "./responses";
 
 export type CompletionMetadata = { finishReason?: string };
 
@@ -12,9 +13,13 @@ export function modelConfig() {
   const llmBase = (process.env.LLM_BASE_URL || "https://api.openai.com/v1").replace(/\/$/, "");
   const embeddingBase = (process.env.EMBEDDING_BASE_URL || llmBase).replace(/\/$/, "");
   const llmModel = process.env.LLM_MODEL || "";
+  const llmApiStyle = process.env.LLM_API_STYLE || "chat_completions";
+  if (!["chat_completions", "responses"].includes(llmApiStyle)) throw new Error("LLM_API_STYLE 必须是 chat_completions 或 responses");
+  const reasoningEffort = process.env.LLM_REASONING_EFFORT || "low";
+  if (!["none", "minimal", "low", "medium", "high", "xhigh"].includes(reasoningEffort)) throw new Error("LLM_REASONING_EFFORT 无效");
   const embeddingModel = process.env.EMBEDDING_MODEL || "";
   return {
-    mode, llmBase, embeddingBase, llmModel, embeddingModel,
+    mode, llmBase, embeddingBase, llmModel, embeddingModel, llmApiStyle, reasoningEffort,
     llmKey: process.env.LLM_API_KEY || "",
     embeddingKey: process.env.EMBEDDING_API_KEY || process.env.LLM_API_KEY || "",
     space: mode === "demo" ? "demo:bigram-v1:512" : `live:${embeddingBase}:${embeddingModel}`,
@@ -27,7 +32,7 @@ export function publicConfig() {
     !c.llmKey && "LLM_API_KEY", !c.llmModel && "LLM_MODEL",
     !c.embeddingKey && "EMBEDDING_API_KEY", !c.embeddingModel && "EMBEDDING_MODEL",
   ].filter(Boolean) : [];
-  return { mode: c.mode, llmModel: c.llmModel, embeddingModel: c.embeddingModel,
+  return { mode: c.mode, llmModel: c.llmModel, llmApiStyle: c.llmApiStyle, embeddingModel: c.embeddingModel,
     ready: missing.length === 0, missing, space: c.space };
 }
 
@@ -103,6 +108,14 @@ export async function complete(system: string, messages: Turn[], maxTokens = 120
   onDelta?: (text: string) => void, signal?: AbortSignal, onMetadata?: (meta: CompletionMetadata) => void): Promise<string> {
   const c = modelConfig();
   if (!c.llmKey || !c.llmModel) throw new Error("请在 .env.local 配置 LLM 密钥和模型名称");
+  if (c.llmApiStyle === "responses") {
+    const response = await requestResponse(c.llmBase, "responses", c.llmKey, {
+      model: c.llmModel, instructions: system,
+      input: messages.map(message => ({ role: message.role, content: [{ type: message.role === "assistant" ? "output_text" : "input_text", text: message.content }] })),
+      max_output_tokens: maxTokens, reasoning: { effort: c.reasoningEffort }, store: false, stream: true,
+    }, signal);
+    return readResponses(response, onDelta, onMetadata);
+  }
   const body = {
     model: c.llmModel, messages: [{ role: "system", content: system }, ...messages], max_tokens: maxTokens,
   };

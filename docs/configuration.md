@@ -12,6 +12,8 @@
 | `LLM_BASE_URL` | `https://api.openai.com/v1` | 兼容聊天接口的 API 前缀，可改为千问等供应商 |
 | `LLM_API_KEY` | 空 | live 聊天密钥 |
 | `LLM_MODEL` | 空 | live 聊天模型名 |
+| `LLM_API_STYLE` | `chat_completions` | `chat_completions` 或 `responses`；后者用于只支持 Responses 的网关 |
+| `LLM_REASONING_EFFORT` | `low` | Responses模式的推理强度；需使用模型支持的值 |
 | `EMBEDDING_BASE_URL` | 未设置时使用聊天地址 | 兼容向量接口的 API 前缀 |
 | `EMBEDDING_API_KEY` | 未设置时使用聊天密钥 | 本地 Ollama 可填占位值 `ollama` |
 | `EMBEDDING_MODEL` | 空 | live 向量模型名 |
@@ -22,7 +24,9 @@
 
 聊天模型示例为 `qwen3.8-max`；更换聊天模型只需修改 `LLM_MODEL` 并重启服务，不需要更换本地 Embedding。免费 token 适用的模型、地域和有效期以供应商控制台为准；历史 Flash 测试的单价不能用于估算 Max 的费用。
 
-BASE_URL 不包含 `/chat/completions` 或 `/embeddings`。页面聊天要求服务支持 `stream: true`，返回 `text/event-stream` 的 `choices[].delta.content`；非流式 API 调用、事实提取和整理使用完整聊天 JSON。仅支持这些接口不代表所有供应商的额外鉴权、模型参数或结构化输出机制都已适配。
+BASE_URL 不包含 `/chat/completions`、`/responses` 或 `/embeddings`。默认聊天模式要求支持 Chat Completions：页面读取SSE的 `choices[].delta.content`，事实提取和整理读取完整JSON。
+
+Responses模式在聊天、提取和整理时均请求SSE，设置 `store:false`、`max_output_tokens` 和相同的推理强度；不发送Chat专用的 `max_tokens`、`enable_thinking` 或 `temperature`。最终仅取assistant消息的output_text，不把推理文本作为答案。必须收到完成事件；失败或中断不接受为完整回答，长度截断会传给结构化校验。此适配不代表所有网关参数与模型均已验证，须先做小请求连通性测试。Embedding仍走独立的兼容向量接口。
 
 多条摘要的向量请求使用 `input: string[]`，响应 `data` 应包含每个输入对应的向量；若提供 `index` 则按索引对应，否则按返回顺序对应。不支持批量或响应校验失败时自动回退为最多 3 个并发的逐条请求，不需要新增环境变量；逐条失败保留原文并提示 partial。查询向量和单条摘要仍使用字符串输入。
 

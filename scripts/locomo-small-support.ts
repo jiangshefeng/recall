@@ -51,7 +51,7 @@ export function plainChunks(turns: SourceTurn[], targetChars = 1400) {
 export type TokenAttempt = { chargedTokens: number; reserveTokens: number; phase: string; status: string;
   promptTokens?: number; completionTokens?: number; totalTokens?: number };
 export function reserveTokens(payload: { max_tokens?: number; [key: string]: unknown }) {
-  return Buffer.byteLength(JSON.stringify(payload), "utf8") + 2048 + (payload.max_tokens ?? 16000);
+  return Buffer.byteLength(JSON.stringify(payload), "utf8") + 2048 + (payload.max_tokens ?? Number(payload.max_output_tokens ?? 16000));
 }
 export function remainingAllows(attempts: TokenAttempt[], reserve: number, limit: number) {
   return attempts.reduce((n, a) => n + a.chargedTokens, 0) + reserve <= limit;
