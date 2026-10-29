@@ -21,7 +21,7 @@ export class MemoryStore {
       CREATE TABLE IF NOT EXISTS memories (
         id TEXT PRIMARY KEY, scope TEXT NOT NULL, summary TEXT NOT NULL,
         vector TEXT NOT NULL, space TEXT NOT NULL, status TEXT NOT NULL,
-        source_ids TEXT NOT NULL, parent_ids TEXT NOT NULL, reason TEXT NOT NULL,
+        source_ids TEXT NOT NULL, source_order TEXT, parent_ids TEXT NOT NULL, reason TEXT NOT NULL,
         created_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS memory_scope ON memories(scope, space, status);
@@ -38,6 +38,9 @@ export class MemoryStore {
         record_id TEXT NOT NULL, reason TEXT NOT NULL, created_at TEXT NOT NULL
       );
     `);
+    const memoryColumns = this.db.prepare("PRAGMA table_info(memories)").all() as { name: string }[];
+    if (!memoryColumns.some(column => column.name === "source_order"))
+      this.db.exec("ALTER TABLE memories ADD COLUMN source_order TEXT");
   }
   close() { this.db.close(); }
   saveRecord(r: RecordEntry) {
@@ -45,9 +48,12 @@ export class MemoryStore {
       .run(r.id, r.scope, r.question, r.answer, r.context, r.createdAt);
   }
   private insert(m: Memory) {
-    this.db.prepare("INSERT INTO memories VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    this.db.prepare(`INSERT INTO memories
+      (id,scope,summary,vector,space,status,source_ids,source_order,parent_ids,reason,created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(m.id, m.scope, m.summary, JSON.stringify(m.vector), m.space, m.status,
-        JSON.stringify(m.sourceIds), JSON.stringify(m.parentIds), m.reason, m.createdAt);
+        JSON.stringify(m.sourceIds), m.sourceOrder ? JSON.stringify(m.sourceOrder) : null,
+        JSON.stringify(m.parentIds), m.reason, m.createdAt);
     this.db.prepare("INSERT INTO memory_kinds VALUES (?, ?)").run(m.id, m.kind ?? "fact");
     if (m.stage) {
       this.db.prepare("INSERT OR IGNORE INTO stages VALUES (?, ?, ?, ?, ?)")
@@ -111,6 +117,7 @@ export class MemoryStore {
       kind: row.kind === "qa" || (!row.kind && String(row.summary).startsWith("问答记录（助手回答未验证）：")) ? "qa" : "fact",
       vector: JSON.parse(String(row.vector)), space: String(row.space),
       status: row.status as "hot" | "cold", sourceIds: JSON.parse(String(row.source_ids)),
+      ...(row.source_order ? { sourceOrder: JSON.parse(String(row.source_order)) } : {}),
       parentIds: JSON.parse(String(row.parent_ids)), reason: String(row.reason), createdAt: String(row.created_at),
       ...(row.stage_id ? { stage: { id: String(row.stage_id), content: String(row.stage_content),
         sourceIds: JSON.parse(String(row.stage_sources)), createdAt: String(row.stage_date) } } : {}),
@@ -131,8 +138,9 @@ export class MemoryStore {
     }));
     return ids ? mapped.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id)) : mapped;
   }
-  recentRecords(scope: string, ids: string[], limit: number): RecordEntry[] {
+  recentRecords(scope: string, ids: string[], limit: number, preserveOrder = false): RecordEntry[] {
     if (!ids.length) return [];
+    if (preserveOrder) return this.records(scope, ids.slice(0, limit));
     // Bound database reads before loading full text; JSON avoids one SQL variable per source ID.
     const rows = this.db.prepare(`SELECT * FROM records
       WHERE scope=? AND id IN (SELECT value FROM json_each(?))
@@ -147,7 +155,7 @@ export class MemoryStore {
   }
 }
 
-const STORE_SCHEMA_VERSION = 4;
+const STORE_SCHEMA_VERSION = 5;
 const globalStore = globalThis as unknown as { ragStore?: MemoryStore; ragStoreSchemaVersion?: number };
 export function getStore() {
   if (!globalStore.ragStore) {

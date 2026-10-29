@@ -39,10 +39,7 @@ Responses模式在聊天、提取和整理时均请求SSE，设置 `store:false`
 | `RAG_FIRST_CANDIDATES` | 20 | 首轮评分候选上限 |
 | `RAG_FIRST_LIMIT` | 3 | 首轮最多选入的记忆数 |
 | `RAG_NEIGHBORS_PER_SEED` | 5 | 每个首轮起点的邻居候选上限 |
-| `RAG_SECOND_LIMIT` | 3 | 第二轮最多选入的记忆数 |
-| `RAG_MIN_FIRST_RESULTS` | 3 | 首轮少于该数量且有预算时尝试扩展 |
-| `RAG_MIN_STRONG_RESULTS` | 2 | 首轮高分记忆少于该数量且有预算时尝试扩展 |
-| `RAG_STRONG_SCORE` | 0.75 | 首轮高分判定；同时不低于当前检索门槛 |
+| `RAG_SECOND_LIMIT` | 2 | 条件触发时第二轮最多再选入的记忆数 |
 
 这些分数是余弦相似度，不是置信度或准确率。降低门槛会扩大候选范围，也可能带来不相关内容。候选是否合并仍由 LLM 判断。阈值代码会限制到 `[-1, 1]`，异常数值回退默认值；建议使用上述正常范围内的数值校准。
 
@@ -52,9 +49,9 @@ demo 固定使用检索门槛 0.08、重复摘要候选门槛 0.64，且每条�
 
 | 环境变量 | 默认值 | 作用 |
 | --- | --- | --- |
-| `RAG_MAX_RECORDS` | 12 | 两轮共用的证据数上限，每个阶段摘要也算一条 |
-| `RAG_SOURCE_CANDIDATES_PER_MEMORY` | 4 | 每条命中记忆最多读取的未覆盖原文候选，按时间倒序，范围1–4 |
-| `RAG_SOURCE_LIMIT_PER_MEMORY` | 2 | 从候选中默认选最近两条原文，范围1–4且不超过候选上限 |
+| `RAG_MAX_RECORDS` | 6 | 两轮共用的证据数上限，原文与阶段摘要合计，每个阶段摘要也算一条 |
+| `RAG_SOURCE_CANDIDATES_PER_MEMORY` | 4 | 每条命中记忆最多读取的未覆盖原文候选；合并记忆优先按 LLM 排序，其余按时间倒序，范围1–4 |
+| `RAG_SOURCE_LIMIT_PER_MEMORY` | 2 | 从候选中默认选前两条原文，范围1–4且不超过候选上限 |
 | `RAG_CONTEXT_MAX_CHARS` | 18000 | 实际历史证据 JSON 的字符上限 |
 | `RAG_CONTEXT_MAX_TOKENS` | 6000 | 同一 JSON 的估算 token 上限 |
 | `RAG_RECORD_MAX_CHARS` | 5000 | 每条证据正文的字符上限 |

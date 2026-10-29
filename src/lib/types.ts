@@ -14,6 +14,7 @@ export type Memory = {
   space: string;
   status: "hot" | "cold";
   sourceIds: string[];
+  sourceOrder?: string[];
   parentIds: string[];
   reason: string;
   createdAt: string;
@@ -45,9 +46,6 @@ export type RetrievalPolicy = {
   maxContextChars: number;
   maxEstimatedTokens: number;
   maxRecordChars: number;
-  minFirstResults: number;
-  minStrongResults: number;
-  strongScore: number;
 };
 export type PromptEvidence = {
   kind?: "stage";
@@ -58,7 +56,7 @@ export type PromptEvidence = {
   content: string;
   truncated: boolean;
 };
-export type ExpansionReason = "sources-only" | "no-first-results" | "budget-exhausted" | "enough-first-results" | "few-first-results" | "few-strong-results";
+export type ExpansionReason = "sources-only" | "no-first-results" | "budget-exhausted" | "enough-first-results" | "single-first-result";
 export type Evidence = {
   stages?: StageSummary[];
   suggestions?: Hit[];
@@ -71,7 +69,6 @@ export type Evidence = {
     expanded: boolean;
     reason: ExpansionReason;
     firstCandidates: number;
-    strongFirstResults: number;
     minScore: number;
     policy: RetrievalPolicy;
     usage: { records: number; chars: number; estimatedTokens: number; truncatedRecords: number };

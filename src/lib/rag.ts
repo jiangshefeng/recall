@@ -89,7 +89,10 @@ export async function decideMemoryMerges(store: ReturnType<typeof getStore>, job
   let finishReason: string | undefined;
   const result = await structured(mergePrompt, input, mergeEnvelope,
     Math.min(16000, 500 + jobs.length * 2500), meta => { finishReason = meta.finishReason; });
-  return validateMergeDecisions(result.decisions, jobs, finishReason);
+  return validateMergeDecisions(result.decisions, jobs.map(job => ({
+    incoming: { ...job.incoming, originalIds: pendingSourceIds(job.incoming) },
+    candidates: job.candidates.map(memory => ({ ...memory, originalIds: pendingSourceIds(memory) })),
+  })), finishReason);
 }
 
 // Compatibility helper for one-off repair tools; normal writes use one batch.
@@ -200,7 +203,7 @@ export async function remember(scope: string, question: string, answer: string, 
             sourceIds: plan.sourceIds, createdAt: new Date().toISOString() } : closest.stage;
           const resultSummary = isQA(incoming) ? qaSummary(decision.summary) : decision.summary;
           const merged: Memory = { ...incoming, id: randomUUID(), summary: resultSummary,
-            vector: [], sourceIds: plan.sourceIds, stage,
+            vector: [], sourceIds: plan.sourceIds, sourceOrder: decision.sourceOrder, stage,
             parentIds: [closest.id, incoming.id], reason: decision.reason, createdAt: new Date().toISOString() };
           operations.push({ incoming, closest, action: action as "merge" | "replace", merged });
           usedCandidates.add(closest.id); continue;

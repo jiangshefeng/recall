@@ -5,9 +5,8 @@ const reasons: Record<ExpansionReason, string> = {
   "sources-only": "当前选择原文追溯，不进行关联扩展",
   "no-first-results": "首轮没有可用证据，没有扩展起点",
   "budget-exhausted": "原文条数或内容预算已用尽，停止扩展",
-  "enough-first-results": "首轮条数和高相关条数已达设定值，跳过扩展",
-  "few-first-results": "首轮结果偏少，且仍有预算，尝试补充",
-  "few-strong-results": "首轮高相关结果偏少，且仍有预算，尝试补充",
+  "enough-first-results": "首轮命中 2 条或以上，按规则跳过关联扩展",
+  "single-first-result": "首轮恰好命中 1 条，且仍有预算，尝试关联扩展",
 };
 
 function HitCard({ hit, index }: { hit: Hit; index: number }) {

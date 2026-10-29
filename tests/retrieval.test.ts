@@ -47,14 +47,14 @@ test("default first round keeps at most three memories from twenty candidates", 
   assert.equal(result.second.length, 0);
 });
 
-test("default weak matches expand to at most three more memories", t => {
+test("three first-round weak matches do not expand", t => {
   const store = new MemoryStore(":memory:"); t.after(() => store.close());
   for (let i = 0; i < 12; i++) add(store, `weak-hit-${i}`, 0.7 - i * 0.01);
   const result = retrieve(store);
   assert.equal(result.first.length, 3);
-  assert.equal(result.second.length, 3);
-  assert.equal(result.trace.reason, "few-strong-results");
-  assert.equal(result.records.length, 6);
+  assert.equal(result.second.length, 0);
+  assert.equal(result.trace.reason, "enough-first-results");
+  assert.equal(result.records.length, 3);
 });
 
 test("one large event reads four recent candidates, sends only its newest two, and preserves all sources", t => {
@@ -78,6 +78,15 @@ test("one large event reads four recent candidates, sends only its newest two, a
   assert.ok(result.records.every(r => r.scope === "a"));
   const four = retrieve(store, { sourceLimitPerMemory: 4 }, "sources");
   assert.deepEqual(four.records.map(r => r.id), ["event-9", "event-8", "event-7", "event-6"]);
+});
+
+test("merged memory source order controls which originals are sent and survives SQLite reads", t => {
+  const store = new MemoryStore(":memory:"); t.after(() => store.close());
+  for (const id of ["r1", "r2", "r3", "r4"]) store.saveRecord(original(id));
+  add(store, "ordered-memory", 0.95, { sourceIds: ["r1", "r2", "r3", "r4"], sourceOrder: ["r3", "r1", "r4", "r2"] });
+  assert.deepEqual(store.memories("a")[0].sourceOrder, ["r3", "r1", "r4", "r2"]);
+  const result = retrieve(store, {}, "sources");
+  assert.deepEqual(result.records.map(record => record.id), ["r3", "r1"]);
 });
 
 test("covered originals stay archived while the latest two deltas and the stage remain available", t => {
@@ -104,17 +113,18 @@ test("shared newest sources are not replaced with older history just to fill dup
   assert.equal(result.first.length, 1);
 });
 
-test("two first-round hits trigger expansion; score is exactly 75% original plus 25% neighbor", t => {
+test("exactly one first-round hit triggers at most two neighbors; score uses 75/25 weighting", t => {
   const store = new MemoryStore(":memory:"); t.after(() => store.close());
-  add(store, "seed-a", 0.9); add(store, "seed-b", 0.85);
+  add(store, "seed-a", 0.9);
   add(store, "related-hot", 0.8);
+  add(store, "related-hot-2", 0.75);
   add(store, "old-preference", 0.99, { status: "cold" });
-  const result = retrieve(store, { firstLimit: 2 });
-  assert.equal(result.first.length, 2);
-  assert.equal(result.trace.reason, "few-first-results");
+  const result = retrieve(store, { firstLimit: 1 });
+  assert.equal(result.first.length, 1);
+  assert.equal(result.trace.reason, "single-first-result");
   assert.equal(result.trace.expanded, true);
-  assert.equal(result.second.length, 1);
-  assert.equal(result.second[0].id, "related-hot");
+  assert.equal(result.second.length, 2);
+  assert.ok(result.second.some(x => x.id === "related-hot"));
   assert.ok([...result.first, ...result.second].every(x => x.status === "hot"));
   assert.ok(!result.records.some(x => x.id === "old-preference"));
   const hit = result.second[0];
@@ -122,14 +132,14 @@ test("two first-round hits trigger expansion; score is exactly 75% original plus
   assert.equal(result.records.length, 3);
 });
 
-test("enough records with few high-relevance hits still triggers a second round", t => {
+test("three first-round hits skip expansion even when their scores are modest", t => {
   const store = new MemoryStore(":memory:"); t.after(() => store.close());
   add(store, "a", 0.65); add(store, "b", 0.64); add(store, "c", 0.63);
   add(store, "neighbor", 0.6);
   const result = retrieve(store, { firstLimit: 3 });
-  assert.equal(result.trace.reason, "few-strong-results");
-  assert.equal(result.trace.strongFirstResults, 0);
-  assert.equal(result.second.length, 1);
+  assert.equal(result.trace.reason, "enough-first-results");
+  assert.equal(result.trace.expanded, false);
+  assert.equal(result.second.length, 0);
 });
 
 test("a close neighbor below the original-query threshold is excluded before the branch cap", t => {
@@ -144,12 +154,12 @@ test("a close neighbor below the original-query threshold is excluded before the
 
 test("multiple summaries sharing one original do not consume duplicate slots or tokens", t => {
   const store = new MemoryStore(":memory:"); t.after(() => store.close());
-  add(store, "seed-a", 0.9); add(store, "seed-b", 0.85);
+  add(store, "seed-a", 0.9);
   add(store, "alias-a", 0.8, { sourceIds: ["shared"] });
   add(store, "alias-b", 0.79, { sourceIds: ["shared"] });
-  const result = retrieve(store, { firstLimit: 2 });
+  const result = retrieve(store, { firstLimit: 1 });
   assert.equal(result.second.length, 1);
-  assert.equal(result.records.length, 3);
+  assert.equal(result.records.length, 2);
   assert.equal(new Set(result.context.map(x => x.id)).size, result.context.length);
   assert.equal(result.trace.usage.chars, JSON.stringify(result.context).length);
   assert.equal(result.trace.usage.estimatedTokens, estimateTokens(JSON.stringify(result.context)));
@@ -219,24 +229,23 @@ test("no qualifying first-round results means no expansion and no forced filling
   assert.equal(result.context.length, 0);
 });
 
-test("first/second rounds share the final record budget", t => {
+test("first/second rounds share the final record budget and second round is capped at two", t => {
   const store = new MemoryStore(":memory:"); t.after(() => store.close());
-  add(store, "seed-a", 0.9); add(store, "seed-b", 0.85);
+  add(store, "seed-a", 0.9);
   for (let i = 0; i < 8; i++) add(store, `hot-neighbor-${i}`, 0.8 - i * 0.01);
-  const result = retrieve(store, { firstLimit: 2, maxRecords: 4 });
-  assert.equal(result.first.length, 2);
+  const result = retrieve(store, { firstLimit: 1, maxRecords: 4 });
+  assert.equal(result.first.length, 1);
   assert.equal(result.second.length, 2);
-  assert.equal(result.records.length, 4);
+  assert.equal(result.records.length, 3);
 });
 
 test("bad numeric settings fall back or clamp rather than disabling limits", () => {
   const policy = normalizePolicy({ firstCandidates: NaN, firstLimit: 1_000_000, maxRecords: -1,
-    maxEstimatedTokens: Infinity, strongScore: 8, sourceCandidatesPerMemory: 999, sourceLimitPerMemory: 999 });
+    maxEstimatedTokens: Infinity, sourceCandidatesPerMemory: 999, sourceLimitPerMemory: 999 });
   assert.equal(policy.firstCandidates, 20);
   assert.equal(policy.firstLimit, 20);
   assert.equal(policy.maxRecords, 1);
   assert.equal(policy.maxEstimatedTokens, 6000);
-  assert.equal(policy.strongScore, 1);
   assert.equal(policy.sourceCandidatesPerMemory, 4);
   assert.equal(policy.sourceLimitPerMemory, 4);
   assert.equal(normalizePolicy({ sourceCandidatesPerMemory: 1, sourceLimitPerMemory: 4 }).sourceLimitPerMemory, 1);

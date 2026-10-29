@@ -4,25 +4,23 @@ import type { MemoryStore } from "./store";
 import type { Evidence, ExpansionReason, Hit, Memory, RetrievalMode, RetrievalPolicy } from "./types";
 
 export const DEFAULT_RETRIEVAL_POLICY: RetrievalPolicy = {
-  firstCandidates: 20, firstLimit: 3, neighborsPerSeed: 5, secondLimit: 3,
+  firstCandidates: 20, firstLimit: 3, neighborsPerSeed: 5, secondLimit: 2,
   sourceCandidatesPerMemory: 4, sourceLimitPerMemory: 2,
-  maxRecords: 12, maxContextChars: 18_000, maxEstimatedTokens: 6000, maxRecordChars: 5000,
-  minFirstResults: 3, minStrongResults: 2, strongScore: 0.75,
+  maxRecords: 6, maxContextChars: 18_000, maxEstimatedTokens: 6000, maxRecordChars: 5000,
 };
 
 export function normalizePolicy(input: Partial<RetrievalPolicy> = {}): RetrievalPolicy {
   const result = { ...DEFAULT_RETRIEVAL_POLICY };
-  const limits: Record<Exclude<keyof RetrievalPolicy, "strongScore">, [number, number]> = {
+  const limits: Record<keyof RetrievalPolicy, [number, number]> = {
     firstCandidates: [1, 100], firstLimit: [1, 20], neighborsPerSeed: [1, 20], secondLimit: [1, 20],
     sourceCandidatesPerMemory: [1, 4], sourceLimitPerMemory: [1, 4],
     maxRecords: [1, 50], maxContextChars: [128, 100_000], maxEstimatedTokens: [32, 32_000],
-    maxRecordChars: [64, 20_000], minFirstResults: [1, 20], minStrongResults: [1, 20],
+    maxRecordChars: [64, 20_000],
   };
   for (const key of Object.keys(limits) as (keyof typeof limits)[]) {
     const value = input[key], [min, max] = limits[key];
     if (typeof value === "number" && Number.isFinite(value)) result[key] = Math.max(min, Math.min(max, Math.floor(value)));
   }
-  if (typeof input.strongScore === "number" && Number.isFinite(input.strongScore)) result.strongScore = Math.max(0, Math.min(1, input.strongScore));
   result.firstLimit = Math.min(result.firstLimit, result.firstCandidates);
   result.sourceLimitPerMemory = Math.min(result.sourceLimitPerMemory, result.sourceCandidatesPerMemory);
   return result;
@@ -34,7 +32,6 @@ export function retrievalPolicyFromEnv(): RetrievalPolicy {
     secondLimit: "RAG_SECOND_LIMIT", maxRecords: "RAG_MAX_RECORDS", maxContextChars: "RAG_CONTEXT_MAX_CHARS",
     sourceCandidatesPerMemory: "RAG_SOURCE_CANDIDATES_PER_MEMORY", sourceLimitPerMemory: "RAG_SOURCE_LIMIT_PER_MEMORY",
     maxEstimatedTokens: "RAG_CONTEXT_MAX_TOKENS", maxRecordChars: "RAG_RECORD_MAX_CHARS",
-    minFirstResults: "RAG_MIN_FIRST_RESULTS", minStrongResults: "RAG_MIN_STRONG_RESULTS", strongScore: "RAG_STRONG_SCORE",
   };
   const input: Partial<RetrievalPolicy> = {};
   for (const key of Object.keys(keys) as (keyof RetrievalPolicy)[]) {
@@ -57,7 +54,10 @@ export function retrieveFrom(store: MemoryStore, scope: string, space: string, q
     const includedSourceIds: string[] = [];
     // Keep full provenance; fetch only recent uncovered candidates, then select the latest sources.
     const covered = new Set(candidate.stage?.sourceIds ?? []);
-    const originals = store.recentRecords(scope, candidate.sourceIds.filter(id => !covered.has(id)), policy.sourceCandidatesPerMemory)
+    const preferredSources = candidate.sourceOrder?.filter(id => candidate.sourceIds.includes(id) && !covered.has(id));
+    const originals = (preferredSources
+      ? store.recentRecords(scope, preferredSources, policy.sourceCandidatesPerMemory, true)
+      : store.recentRecords(scope, candidate.sourceIds.filter(id => !covered.has(id)), policy.sourceCandidatesPerMemory))
       .slice(0, policy.sourceLimitPerMemory);
     for (const record of originals) if (budget.add(record)) includedSourceIds.push(record.id);
     if (candidate.stage && budget.addStage(candidate.stage)) includedSourceIds.push(...candidate.stage.sourceIds);
@@ -71,15 +71,13 @@ export function retrieveFrom(store: MemoryStore, scope: string, space: string, q
     const hit = admit(candidate, { originalScore: candidate.score });
     if (hit) first.push(hit);
   }
-  const strongFirstResults = first.filter(x => x.score >= Math.max(minScore, policy.strongScore)).length;
   let reason: ExpansionReason;
   if (strategy === "sources") reason = "sources-only";
   else if (!first.length) reason = "no-first-results";
   else if (!budget.canAddMore()) reason = "budget-exhausted";
-  else if (first.length < policy.minFirstResults) reason = "few-first-results";
-  else if (strongFirstResults < policy.minStrongResults) reason = "few-strong-results";
+  else if (first.length === 1) reason = "single-first-result";
   else reason = "enough-first-results";
-  const expanded = reason === "few-first-results" || reason === "few-strong-results";
+  const expanded = reason === "single-first-result";
 
   if (expanded) {
     const excluded = new Set(first.map(x => x.id));
@@ -106,5 +104,5 @@ export function retrieveFrom(store: MemoryStore, scope: string, space: string, q
     ? ranked(all, query, 3, -1).map(({ vector: _vector, ...hit }) => hit)
     : [];
   return { first, second, suggestions, records: budget.records, stages: budget.stages, context: budget.context, strategy,
-    trace: { expanded, reason, firstCandidates: candidates.length, strongFirstResults, minScore, policy, usage: budget.usage() } };
+    trace: { expanded, reason, firstCandidates: candidates.length, minScore, policy, usage: budget.usage() } };
 }

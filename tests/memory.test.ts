@@ -46,10 +46,10 @@ test("retrieval isolates scopes/models, removes duplicate second-hop hits and pr
       store.saveMemory(m);
       store.saveRecord({ id, scope: m.scope, question: id, answer: "answer", context: "", createdAt: "2026-01-01" });
     }
-    const expanded = retrieveFrom(store, "a", "test", [1, 0], "expand", 0.5, { firstLimit: 3, minFirstResults: 4 });
-    assert.deepEqual(expanded.first.map(x => x.id), ["a1", "a2", "a3"]);
-    assert.deepEqual(expanded.second.map(x => x.id), ["a4"]);
-    assert.equal(expanded.records.length, 4);
+    const expanded = retrieveFrom(store, "a", "test", [1, 0], "expand", 0.5, { firstLimit: 1 });
+    assert.deepEqual(expanded.first.map(x => x.id), ["a1"]);
+    assert.deepEqual(expanded.second.map(x => x.id), ["a2", "a3"]);
+    assert.equal(expanded.records.length, 3);
     const direct = retrieveFrom(store, "a", "test", [1, 0], "sources", 0.5);
     assert.equal(direct.second.length, 0);
     assert.equal(direct.records.length, 3);

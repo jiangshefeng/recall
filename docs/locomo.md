@@ -2,6 +2,10 @@
 
 [返回 README](../README.md)
 
+[Mem0 四组小样本预试说明](locomo-mem0-pilot.md)
+
+[599 题三组对照计划](locomo-mem0-599.md)
+
 数据及官方评分代码来自 [snap-research/locomo](https://github.com/snap-research/locomo)，论文为 ACL 2024《Evaluating Very Long-Term Conversational Memory of LLM Agents》。数据许可见上游 `LICENSE.txt`（CC BY-NC 4.0）。公开版本 `data/locomo10.json` 有 10 段长对话、1986 题；前四类共 1540 题。不要把不同类别、模型、证据预算或评分方式的结果直接比较。
 
 ## 本项目适配

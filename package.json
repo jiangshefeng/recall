@@ -12,6 +12,8 @@
     "test:extended": "node --env-file=.env.local --import tsx scripts/verify-rag-extended.ts",
     "test:compare": "node --env-file=.env.local --import tsx scripts/compare-memory.ts",
     "test:locomo": "node --env-file=.env.local --import tsx scripts/evaluate-locomo.ts",
+    "test:locomo:mem0-pilot": "node --env-file=.env.local --import tsx scripts/evaluate-locomo-four-arm.ts",
+    "test:locomo:599:mem0": "node --env-file=.env.local --import tsx scripts/run-locomo-mem0-599.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -27,6 +29,7 @@
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "mem0ai": "^3.3.1",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0"
   }
