@@ -1,6 +1,39 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { makeSmallPlan, plainChunks, reserveTokens, remainingAllows, chargeUsage, type Sample, type SourceTurn } from "../scripts/locomo-small-support";
+import { makeSmallPlan, makeBoundedPlan, plainChunks, humanDialogueFragments, selectBalancedQuestions, reserveTokens, remainingAllows, chargeUsage, type Sample, type SourceTurn } from "../scripts/locomo-small-support";
+
+test("human fragments preserve all speakers and source IDs, with replies at block boundaries", () => {
+  const turns: SourceTurn[] = ["A: How are you?", "B: I feel well.", "A: Where do you live?", "B: In Paris.", "A: Thanks."]
+    .map((content, i) => ({ id: `D1:${i}`, session: "s1", sourceDate: "1 January 2024", date: "2024-01-01", content, history: [] }));
+  const fragments = humanDialogueFragments(turns, 110);
+  assert.deepEqual(new Set(fragments.flatMap(f => f.turnIds)), new Set(turns.map(t => t.id)));
+  assert.ok(fragments.some(f => `${f.question}\n${f.answer}`.includes("A: Where do you live?\nB: In Paris.")));
+  assert.ok(fragments.every(f => f.question.includes("Session date:")));
+});
+
+test("balanced selection is deterministic, handles sparse categories, and has no duplicated questions", () => {
+  const sample: Sample = { sample_id: "synthetic", conversation: {}, qa: Array.from({ length: 30 }, (_, i) => ({
+    question: String(i), category: i === 0 ? 3 : i % 2 ? 1 : 5, evidence: [],
+  })) };
+  const selected = selectBalancedQuestions(sample, 12);
+  assert.equal(selected.length, 12); assert.equal(new Set(selected.map(q => q.index)).size, 12);
+  assert.equal(selected.filter(q => q.qa.category === 3).length, 1);
+  assert.deepEqual(selected, selectBalancedQuestions(sample, 12));
+});
+
+test("bounded pilot excludes later turns in the same session from question selection", () => {
+  const sample: Sample = { sample_id: "synthetic", conversation: {
+    session_1_date_time: "1:00 pm on 1 January, 2024", session_1: [
+      { speaker: "A", dia_id: "D1:1", text: "visible" }, { speaker: "A", dia_id: "D1:2", text: "future" },
+    ],
+  }, qa: [
+    { question: "visible", category: 4, evidence: ["D1:1"] },
+    { question: "future", category: 1, evidence: ["D1:2"] },
+    { question: "unknown", category: 5, evidence: [] },
+  ] };
+  const plan = makeBoundedPlan(sample, 1, 1);
+  assert.equal(plan.turns.length, 1); assert.deepEqual(plan.selected.map(x => x.index), [0, 2]);
+});
 
 test("small LoCoMo plan excludes questions with missing/future evidence, preserving whole sessions", () => {
   const sample: Sample = { sample_id: "synthetic", conversation: {

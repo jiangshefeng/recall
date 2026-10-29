@@ -4,9 +4,11 @@ import { StageArchive } from "./stage-archive";
 const reasons: Record<ExpansionReason, string> = {
   "sources-only": "当前选择原文追溯，不进行关联扩展",
   "no-first-results": "首轮没有可用证据，没有扩展起点",
-  "budget-exhausted": "原文条数或内容预算已用尽，停止扩展",
+  "budget-exhausted": "摘要条数或内容预算已用尽，停止扩展",
   "enough-first-results": "首轮命中 4 条或以上，跳过第二轮扩展",
   "below-four-results": "首轮命中少于 4 条，尝试按命中摘要扩展关联记忆",
+  "source-linked-results": "沿首轮摘要的原文关联查找其他热区摘要，去重后按问题相关性排序",
+  "no-linked-results": "没有找到尚未选入的同源热区摘要",
 };
 
 function HitCard({ hit, index }: { hit: Hit; index: number }) {
@@ -38,7 +40,7 @@ export function RetrievalTrace({ evidence, strategy, scope = "default", onClose 
         <p>仅供查看，未作为证据发送给模型。</p>
         {evidence.suggestions.map((hit, i) => <HitCard key={hit.id} hit={hit} index={i} />)}
       </section>}
-      <div className="step"><span>02</span><div><h3>条件关联扩展</h3><p>{`首轮少于 4 条时扩展 · 每个起点最多 ${trace?.policy.neighborsPerSeed ?? 100} 个候选 · 原问题约束`}</p></div><b>{evidence?.second.length ?? "—"}</b></div>
+      <div className="step"><span>02</span><div><h3>同源摘要扩展</h3><p>{`沿首轮摘要的原文关联扩展一次 · 去重后最多补 ${trace?.policy.secondLimit ?? 10} 条 · 不发送原文`}</p></div><b>{evidence?.second.length ?? "—"}</b></div>
       {trace && <div className="expansion-status" data-testid="expansion-status"><b>{trace.expanded ? "已触发第二轮" : "未触发第二轮"}</b><p>{reasons[trace.reason]}</p><small>当前为规则判断，不代表模型已确认信息充分。</small></div>}
       {evidence?.second.map((hit, i) => <HitCard key={hit.id} hit={hit} index={i} />)}
       <div className="step"><span>03</span><div><h3>实际发送的证据</h3><p>与模型接收内容一致 · 来源可追溯</p></div><b>{evidence?.context.length ?? "—"}</b></div>

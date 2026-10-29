@@ -59,7 +59,8 @@ test("stage compression uses prior stage plus deltas for judgment and recompress
     assert.deepEqual(store.records("count", old.sourceIds), original);
     const evidence = await retrieve("count", "举例偏好", "expand");
     assert.equal(evidence.context.length, 1);
-    assert.equal(evidence.context[0].kind, "stage");
+    assert.equal(evidence.context[0].kind, "summary");
+    assert.equal(evidence.context[0].content, hot.summary);
     assert.equal(evidence.records.length, 0);
     assert.equal(evidence.trace.usage.records, 1);
     assert.equal(store.stage("different", firstStageId), undefined);
@@ -72,10 +73,10 @@ test("stage compression uses prior stage plus deltas for judgment and recompress
     assert.ok(mergeInputs[1].memories.some((m: any) => m.stage?.id === firstStageId));
     assert.ok(!JSON.stringify(mergeInputs[1]).includes(old.sourceIds[0]));
     const delta = await retrieve("count", "举例偏好", "expand");
-    assert.equal(delta.context.length, 2);
-    assert.equal(delta.context[0].id, next.recordId);
-    assert.equal(delta.context[1].kind, "stage");
-    assert.deepEqual(delta.records.map(r => r.id), [next.recordId]);
+    assert.equal(delta.context.length, 1);
+    assert.equal(delta.context[0].id, hot.id);
+    assert.equal(delta.context[0].kind, "summary");
+    assert.deepEqual(delta.records, []);
     process.env.RAG_STAGE_SOURCE_THRESHOLD = "1";
     const third = await remember("count", "现在改为始终举例", "收到", []);
     assert.equal(third.merged, 1); assert.equal(merges, 3);
@@ -119,10 +120,12 @@ test("stage compression uses prior stage plus deltas for judgment and recompress
     assert.equal(limited.added, 1); assert.equal(limited.merged, 0);
     assert.equal(merges, beforeLimit);
     delete process.env.RAG_MERGE_INPUT_MAX_CHARS;
-    // Identical stages are not sent twice; archived raw text for other facts remains available.
+    // Stages remain archived; queries send hot summaries without stage or raw text.
     store.saveMemory({ ...hot, id: "alias", status: "hot" });
     const deduped = await retrieve("count", "举例偏好", "expand");
-    assert.equal(deduped.context.filter(e => e.kind === "stage").length, 1);
+    assert.ok(deduped.context.every(e => e.kind === "summary"));
+    assert.equal(deduped.records.length, 0);
+    assert.deepEqual(store.memories("count", space, "hot").find(m => m.id === hot.id)?.stage, hot.stage);
     const bounded = retrieveFrom(store, "count", space, [1, 0], "expand", 0.5, { maxRecords: 1, maxContextChars: 2000 });
     assert.equal(bounded.context.length, 1);
     assert.ok(JSON.stringify(bounded.context).length <= 2000);

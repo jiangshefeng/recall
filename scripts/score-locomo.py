@@ -25,7 +25,7 @@ namespace = {"np": np, "regex": regex, "string": string, "Counter": Counter, "ps
 exec(compile(ast.Module(body=functions, type_ignores=[]), str(official), "exec"), namespace)
 report = json.loads(report_path.read_text(encoding="utf-8-sig"))
 scores = {"status": report["status"], "sample": report["manifest"]["sample"], "arms": {}}
-for arm in ["dynamic", "raw", "mem0"]:
+for arm in ["dynamic", "raw", "raw3", "mem0"]:
     rows = []
     for result in report["results"]:
         output = result.get(arm, {})

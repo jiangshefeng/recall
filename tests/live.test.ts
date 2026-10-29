@@ -58,7 +58,7 @@ test("live adapter flow: merge with provenance, answer with evidence, and retain
       })) });
     } else {
       const input = JSON.parse(payload.messages.at(-1).content);
-      answerHadEvidence = input.historicalEvidence.length === 2;
+      answerHadEvidence = input.historicalEvidence.length === 1 && input.historicalEvidence[0].kind === "summary";
       actualPromptEvidence = input.historicalEvidence;
       content = "根据历史记录，默认 30 分钟，订单 5 分钟 [1][2]。";
     }
@@ -77,7 +77,8 @@ test("live adapter flow: merge with provenance, answer with evidence, and retain
     assert.equal((await remember("live-test", "订单缓存呢？", "5 分钟", [])).action, "merged");
     assert.deepEqual(getStore().stats("live-test", modelConfig().space), { hot: 1, cold: 2, records: 2 });
     const evidence = await retrieve("live-test", "缓存多久过期？", "sources");
-    assert.equal(evidence.records.length, 2);
+    assert.equal(evidence.records.length, 0);
+    assert.equal(evidence.first[0].sourceIds.length, 2);
     assert.match(await answerQuestion("缓存多久过期？", [], evidence), /30 分钟/);
     assert.equal(answerHadEvidence, true);
     assert.deepEqual(actualPromptEvidence, evidence.context);
@@ -99,7 +100,10 @@ test("live adapter flow: merge with provenance, answer with evidence, and retain
     assert.deepEqual(getStore().stats("split-test", modelConfig().space), { hot: 2, cold: 0, records: 1 });
     assert.ok(getStore().memories("split-test").every(m => m.sourceIds[0] === split.recordId));
     const splitEvidence = await retrieve("split-test", "学习", "sources");
-    assert.equal(splitEvidence.context.length, 1);
+    assert.equal(splitEvidence.context.length, 2);
+    assert.equal(new Set(splitEvidence.context.map(entry => entry.id)).size, 2);
+    assert.ok(splitEvidence.context.every(entry => entry.kind === "summary"));
+    assert.equal(splitEvidence.records.length, 0);
     await remember("qa-test", "split", "ack", []);
     const empty = await remember("qa-test", "empty", "收到", []);
     assert.equal(empty.facts, 0);

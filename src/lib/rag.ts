@@ -9,6 +9,7 @@ import { estimateTokens } from "./evidence-budget";
 import { compactContexts } from "./compact-context";
 import { mergeEnvelope, mergePrompt, validateMergeDecisions, type MergeDecision, type MergeResult } from "./merge-protocol";
 import { StructuredOutputError, type OutputDiagnostic } from "./structured-output";
+import { summaryGroundingPrompt } from "./summary-grounding";
 export { retrieveFrom } from "./retrieval";
 import type { Evidence, Memory, RecordEntry, RetrievalMode, Turn } from "./types";
 
@@ -104,20 +105,26 @@ export async function decideMemoryMerge(store: ReturnType<typeof getStore>, inco
   return matching[0];
 }
 
-export async function remember(scope: string, question: string, answer: string, history: Turn[], options: { recordedAt?: string } = {}) {
+export async function remember(scope: string, question: string, answer: string, history: Turn[], options: { recordedAt?: string; sourceType?: "human-dialogue" } = {}) {
   const store = getStore(), c = modelConfig();
   const record: RecordEntry = { id: randomUUID(), scope, question, answer,
+    ...(options.sourceType ? { sourceType: options.sourceType } : {}),
     context: JSON.stringify(history.slice(-6)), createdAt: options.recordedAt === undefined
       ? new Date().toISOString() : new Date(options.recordedAt).toISOString() };
   store.saveRecord(record);
   let summaries: string[];
   let facts = 0, questionSummary = false;
+  const humanDialogue = options.sourceType === "human-dialogue";
   try {
     const extracted: z.infer<typeof summarySchema> = c.mode === "demo" ? { facts: [`用户：${question.slice(0, 600)}`] } : await structured(
-      "仅从当前 question 提取用户新增事实。用户对回答方式的要求、偏好、禁止事项及其变更也是可记忆事实，祈使句不能因此被忽略：例如‘不用给我例子，我要时会说’必须提取为‘用户要求默认不举例，仅明确请求时提供例子’。answer 与 context 只用于消解指代；不得把助手对历史事实的复述、猜测或一般建议当成用户本轮陈述。保留长期/仅本次等作用范围。\n" +
-      '提炼当前问答供未来检索，输出 {"facts":["独立事实摘要"]}。每条只记录同一主体的一个可独立更新的属性，多个属性必须拆分，即使属于同一主题。判断标准：修改其中一个值不需要修改另一个值，则是不同事实。例如同一活动的地点与费用、同一服务的执行时间与保留时长、同一文件的格式与大小限制都分别成条。主体名称和必要适用条件是背景，不单独拆出。单一属性的旧值、新值和生效时间保留在同一条中，不再重复输出当前值。输出前检查并拆开含多个独立属性的条目，删除重复事实。每条补全主体、指代和必要背景，保留具体人名、组织名、产品或项目名、物品名称、地点、日期和时间、数量、版本、否定和不确定性；不要将具体信息概括成宽泛类别。使摘要脱离对话也能理解。相对日期结合消息日期，无法确定时保留原表述及日期背景；消息日期不能当作配置生效日期。仅提炼本轮新增或明确更新的信息，历史只用于理解，不重复汇总。区分用户陈述与助手建议，不把猜测当事实，不推断职业或能力。自然说明事实涉及的主题和明确可靠的语义联系，不堆砌关键词。仅有提问或寒暄、没有新增可记忆信息时输出空数组。每条简洁，最多20条。' + "\nExplicit requests in the current question to forget, retract or delete a specific remembered fact must also be extracted as one fact describing the target and the retraction intent. Do not omit such requests as empty facts; do not infer deletion from negation alone." + "\nAlways also return qaSummary: a concise summary of the CURRENT question topic and the assistant answer, for future retrieval. Preserve concrete names, objects, places, dates, times, quantities and versions in this summary. Distinguish what the user asked from what the assistant answered; never turn a question or suggestion into a personal fact. Write only topical summary content, without fixed labels, prefixes or verification disclaimers; provenance is stored separately. facts may be empty, but qaSummary must be nonempty even for a pure question. Produce both in the same JSON object; no extra call." + extractionRetractionPrompt,
+      summaryGroundingPrompt + (humanDialogue
+        ? "这是历史人物对话导入，不是用户与AI的问答。question和answer都包含带姓名的人类原始发言，两个字段中的明确陈述都可提取为事实；字段名不代表AI角色。必须保留每条事实真正的说话人，不能把一人的经历归给另一人。相邻发言不一定是问答，不得自动假设后一句回答了前一句。context仅用于理解指代，不重复提取旧事实。只提问、寒暄或表示没有回复不是新增事实。没有事实时返回facts=[]，不生成占位问答摘要，不写‘未提供助手回答’。\n"
+        : "仅从当前 question 提取用户新增事实。用户对回答方式的要求、偏好、禁止事项及其变更也是可记忆事实，祈使句不能因此被忽略：例如‘不用给我例子，我要时会说’必须提取为‘用户要求默认不举例，仅明确请求时提供例子’。answer 与 context 只用于消解指代；不得把助手对历史事实的复述、猜测或一般建议当成用户本轮陈述。保留长期/仅本次等作用范围。\n") +
+      '提炼当前问答供未来检索，输出 {"facts":["独立事实摘要"]}。每条只记录同一主体的一个可独立更新的属性，多个属性必须拆分，即使属于同一主题。判断标准：修改其中一个值不需要修改另一个值，则是不同事实。例如同一活动的地点与费用、同一服务的执行时间与保留时长、同一文件的格式与大小限制都分别成条。主体名称和必要适用条件是背景，不单独拆出。单一属性的旧值、新值和生效时间保留在同一条中，不再重复输出当前值。输出前检查并拆开含多个独立属性的条目，删除重复事实。每条补全主体、指代和必要背景，保留具体人名、组织名、产品或项目名、物品名称、地点、日期和时间、数量、版本、否定和不确定性；不要将具体信息概括成宽泛类别。使摘要脱离对话也能理解。相对日期结合消息日期，无法确定时保留原表述及日期背景；消息日期不能当作配置生效日期。仅提炼本轮新增或明确更新的信息，历史只用于理解，不重复汇总。区分用户陈述与助手建议，不把猜测当事实，不推断职业或能力。自然说明事实涉及的主题和明确可靠的语义联系，不堆砌关键词。仅有提问或寒暄、没有新增可记忆信息时输出空数组。每条简洁，最多20条。' + "\nExplicit requests in the current question to forget, retract or delete a specific remembered fact must also be extracted as one fact describing the target and the retraction intent. Do not omit such requests as empty facts; do not infer deletion from negation alone." + (humanDialogue ? "\nOnly return facts from both named human speakers in this current dialogue fragment. Do not generate qaSummary. Questions alone are not personal facts." : "\nAlways also return qaSummary: a concise summary of the CURRENT question topic and the assistant answer, for future retrieval. Preserve concrete names, objects, places, dates, times, quantities and versions in this summary. Distinguish what the user asked from what the assistant answered; never turn a question or suggestion into a personal fact. Write only topical summary content, without fixed labels, prefixes or verification disclaimers; provenance is stored separately. facts may be empty, but qaSummary must be nonempty even for a pure question. Produce both in the same JSON object; no extra call." + extractionRetractionPrompt),
       record, summarySchema);
     facts = extracted.facts.length;
+    if (humanDialogue && !facts) return { action: "skipped", recordId: record.id, facts: 0, summaries: 0, added: 0,
+      message: "历史原文已保存；没有新增事实，未生成占位问答记忆" };
     questionSummary = facts === 0;
     summaries = facts ? extracted.facts : [qaSummary(extracted.qaSummary?.trim() ||
       `用户提问：${question.slice(0, 350)}；助手答复：${answer.slice(0, 250)}`)];

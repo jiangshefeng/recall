@@ -21,25 +21,25 @@ function retrieve(store: MemoryStore, options: Partial<RetrievalPolicy> = {}, st
   return retrieveFrom(store, "a", "model-a", query, strategy, 0.45, options);
 }
 
-test("first round retrieves up to fifteen thresholded summaries and never reads source records", t => {
+test("first round retrieves up to five thresholded summaries and never reads source records", t => {
   const store = new MemoryStore(":memory:"); t.after(() => store.close());
   for (let i = 0; i < 40; i++) add(store, `hot-${i}`, 0.99 - i * 0.01, { sourceIds: [`source-${i}`, `source-extra-${i}`] });
   add(store, "below-threshold", 0.449);
   add(store, "cold", 0.99, { status: "cold" });
-  const recentRecords = store.recentRecords.bind(store);
   let sourceReads = 0;
-  store.recentRecords = (...args) => { sourceReads++; return recentRecords(...args); };
+  store.recentRecords = () => { sourceReads++; throw Error("Original text must not be read"); };
+  store.records = () => { sourceReads++; throw Error("Original text must not be read"); };
 
   const result = retrieve(store);
-  assert.equal(result.first.length, 15);
+  assert.equal(result.first.length, 5);
   assert.equal(result.second.length, 0);
-  assert.equal(result.context.length, 15);
+  assert.equal(result.context.length, 5);
   assert.equal(result.records.length, 0);
   assert.equal(result.stages?.length || 0, 0);
   assert.equal(sourceReads, 0);
   assert.ok(result.context.every(entry => entry.kind === "summary"));
   assert.ok(result.context.every(entry => result.first.some(hit => hit.id === entry.id && hit.summary === entry.content)));
-  assert.equal(result.trace.reason, "budget-exhausted");
+  assert.equal(result.trace.reason, "no-linked-results");
 });
 
 test("the 0.45 boundary is inclusive; below-threshold suggestions stay out of evidence", t => {
@@ -63,44 +63,42 @@ test("zero threshold matches do not expand and expose only the three closest sug
   assert.equal(result.trace.reason, "no-first-results");
 });
 
-test("one to three first-round hits expand using seed similarity and the 75/25 final score threshold", t => {
+test("expansion uses shared source IDs rather than seed-vector similarity or the query threshold", t => {
   const store = new MemoryStore(":memory:"); t.after(() => store.close());
-  add(store, "seed", 0.9);
-  add(store, "related-below-query-threshold", 0.4);
-  add(store, "related-but-weak-final-score", 0.1);
+  add(store, "seed", 0.9, { sourceIds: ["shared"] });
+  add(store, "related-below-query-threshold", 0.4, { sourceIds: ["shared"] });
+  add(store, "unlinked-high-seed-similarity", 0.4);
+  add(store, "related-weak-score", 0.1, { sourceIds: ["shared"] });
   const result = retrieve(store);
   assert.equal(result.first.length, 1);
-  assert.equal(result.trace.reason, "below-four-results");
+  assert.equal(result.trace.reason, "source-linked-results");
   assert.equal(result.trace.expanded, true);
-  assert.deepEqual(result.second.map(hit => hit.id), ["related-below-query-threshold"]);
+  assert.deepEqual(result.second.map(hit => hit.id), ["related-below-query-threshold", "related-weak-score"]);
   assert.ok(result.second[0].originalScore! < 0.45);
-  assert.ok(result.second[0].neighborScore! >= 0.45);
-  assert.equal(result.second[0].score, result.second[0].originalScore! * 0.75 + result.second[0].neighborScore! * 0.25);
-  assert.ok(result.second[0].score >= 0.45);
+  assert.equal(result.second[0].score, result.second[0].originalScore);
+  assert.equal(result.second[0].via, "seed");
   assert.equal(result.records.length, 0);
 });
 
-test("three first-round hits expand, while four hits skip the second round", t => {
+test("five seeds expand once; duplicate sources, cold versions and newly linked sources cannot add repeated or recursive evidence", t => {
   const store = new MemoryStore(":memory:"); t.after(() => store.close());
-  add(store, "a", 0.9); add(store, "b", 0.8); add(store, "c", 0.7);
-  add(store, "related", 0.4);
-  const three = retrieve(store);
-  assert.equal(three.first.length, 3);
-  assert.equal(three.trace.expanded, true);
-  assert.ok(three.second.some(hit => hit.id === "related"));
-
-  add(store, "d", 0.6);
-  const four = retrieve(store);
-  assert.equal(four.first.length, 4);
-  assert.equal(four.trace.expanded, false);
-  assert.equal(four.trace.reason, "enough-first-results");
-  assert.equal(four.second.length, 0);
+  for (let i = 0; i < 5; i++) add(store, `seed-${i}`, 0.99 - i * 0.05, { sourceIds: ["shared", "shared"] });
+  add(store, "related", 0.4, { sourceIds: ["shared", "new-source"] });
+  add(store, "recursive", 0.3, { sourceIds: ["new-source"] });
+  add(store, "cold-related", 0.4, { sourceIds: ["shared"], status: "cold" });
+  store.saveMemory({ ...store.memories("a")[0], id: "other-scope", scope: "b", vector: vector(0.4) });
+  add(store, "other-space", 0.4, { sourceIds: ["shared"], space: "other" });
+  const result = retrieve(store);
+  assert.equal(result.first.length, 5);
+  assert.equal(result.trace.expanded, true);
+  assert.deepEqual(result.second.map(hit => hit.id), ["related"]);
+  assert.equal(new Set(result.context.map(e => e.id)).size, result.context.length);
 });
 
 test("first and second round share an absolute fifteen-summary cap", t => {
   const store = new MemoryStore(":memory:"); t.after(() => store.close());
-  add(store, "seed", 0.9);
-  for (let i = 0; i < 40; i++) add(store, `neighbor-${i}`, 0.4);
+  add(store, "seed", 0.9, { sourceIds: ["shared"] });
+  for (let i = 0; i < 40; i++) add(store, `neighbor-${i}`, 0.4, { sourceIds: ["shared"] });
   const result = retrieve(store, { maxRecords: 100, secondLimit: 100 });
   assert.equal(result.first.length, 1);
   assert.equal(result.second.length, 14);

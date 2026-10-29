@@ -10,7 +10,70 @@
 
 ## 本项目适配
 
-当前默认检索已调整为3＋3条记忆，每条最多读取4条最新原文候选、默认发送最近2条，未覆盖原文达到5条时在合并过程中阶段压缩。已有评测报告保留其运行时配置（例如此前的6＋6），不能用新默认值解读旧报告；复测请使用新输出目录。调整参数或代码后，不要在旧报告目录续跑并混合成绩。
+当前源码默认查询只读热区摘要，两轮合计最多15条，不再向回答模型发送原文或阶段摘要。未覆盖原文达到5条时仍在合并过程中阶段压缩；4个原文候选、默认2条的参数仍存在，但不触发当前查询的原文读取。本地已有环境变量可能覆盖默认数量，评测须检查实际 manifest。已有评测报告保留其运行时配置（例如此前的3＋3原文检索），不能用新默认值解读旧报告；复测请使用新输出目录。调整参数或代码后，不要在旧报告目录续跑并混合成绩。
+
+### 当前摘要检索的三组快速试测
+
+[完整历史导入后的50题结果与限制](locomo-human-dialogue-50-results.md)
+
+[前4条摘要补最多8条去重原文：50题收益与消耗](locomo-top4-sources8-results.md)
+
+新增的历史人物导入模式通过 `LOCOMO_HUMAN_DIALOGUE=true` 启用。它把原文按目标1600字符组织成同一会话内的片段，相邻片段重叠一条完整发言；片段首条进入 `question`，其余带姓名的发言进入 `answer`。两个字段都明确声明为历史人物原话，不能当作用户与AI角色，也不推断相邻发言必然构成问答。前六条更早发言仅用于理解。提取仍最多20条独立事实，合并、向量和检索算法保持原样；无新增事实时保存原文，跳过占位问答记忆。单条过长发言保持完整，可能单独成片段且 `answer` 为空，此时同样不会强制生成问答摘要。此模式仅为内部选项，没有加入聊天HTTP请求参数。
+
+一条写入原始记录现在对应一个片段，报告的 `ingestion.turnIds` 保留全部原始发言ID及重叠，原始发言数与写入记录数分别报告。阶段阈值5仍按所关联的写入记录数判断，此时单位为片段，不能按此前逐发言导入的5条发言解读。来源ID覆盖不代表该片段中的每个事实都保留在摘要中。
+
+人物来源身份以结构化 `sourceType` 保存在独立 `record_sources` 表，随原文读回、上下文去重和合并核验传递，阶段整理同样可识别双方原话；不依赖原文正文自称可信。旧记录没有此标记，仍按普通问答处理。可先设 `LOCOMO_PAUSE_AFTER_IMPORTS=2` 完成两个片段后正常暂停检查，清除该环境变量再用相同命令续跑；不重复已结算的预检和已完成导入。此开关只控制执行检查点，不改变选题或模型参数。
+
+完整历史可用 `LOCOMO_ALL_QUESTIONS=true` 配合 `LOCOMO_QUESTION_LIMIT=50`：先按五类均衡分配题数（不足的类按容量分配），再在类内等距选题；在调用模型前确定，不按答题成绩筛题。例如最短的 `conv-30` 包含369条发言，`LOCOMO_SESSIONS` 必须设置为数据中该对话的完整会话数，`LOCOMO_TURN_LIMIT` 留空。改变导入方式必须用新库，旧14题短前缀结果保留，不能用不同题目或写入单位的分数变化证明单一改动带来的提升。
+
+`scripts/judge-locomo.ts <报告目录>` 在三组回答完成后，可使用同一个配置模型的独立调用做盲测语义判分；只接收题目、标准答案、参考原文和候选答案，不接收系统名称。相同题目下完全相同的候选答案共用一次判决，第五类仍用离线官方弃答规则。提示词、判断、原始响应、已知用量及未知预留全部保存到 `semantic-judge/`，缺用量或失败停止，不自动重复。它是补充判分，不是人工正确率，也不是官方J-score的逐项复现。默认新增裁判预算25万token，回答系统看不到标准答案；模型判分完成后不会回写记忆库。官方F1评分函数本身不变，评分包装脚本现直接支持 `raw3` 字段。
+
+使用首轮5条、同源扩展最多10条、总计15条摘要，完整历史固定50题示例：
+
+```powershell
+$env:LOCOMO_SAMPLE='conv-30'
+$env:LOCOMO_SESSIONS='19'
+Remove-Item Env:LOCOMO_TURN_LIMIT -ErrorAction SilentlyContinue
+$env:LOCOMO_ALL_QUESTIONS='true'
+$env:LOCOMO_HUMAN_DIALOGUE='true'
+$env:LOCOMO_QUESTION_LIMIT='50'
+$env:LOCOMO_EXPECTED_MODEL='gpt-6.1-sol'
+$env:LOCOMO_OUT='D:\recall\artifacts\locomo-human-dialogue-new'
+$env:LOCOMO_BUDGET_TOKENS='2000000'
+$env:LOCOMO_ANSWER_RESERVE='250000'
+$env:RAG_FIRST_LIMIT='5'
+$env:RAG_SECOND_LIMIT='10'
+$env:RAG_MAX_RECORDS='15'
+$env:RAG_STAGE_SOURCE_THRESHOLD='5'
+node --env-file=.env.local --import tsx scripts/evaluate-locomo-three-arm.ts
+# 三组回答completed后再运行裁判，额外上限25万token；不自动使用其他模型。
+node --env-file=.env.local --import tsx scripts/judge-locomo.ts $env:LOCOMO_OUT
+# Python需装有numpy/nltk/regex；此步只做本地官方评分和报告，不调用模型。
+node --import tsx scripts/render-locomo-three-arm.ts $env:LOCOMO_OUT <Python路径>
+```
+
+`scripts/evaluate-locomo-three-arm.ts` 支持用 `LOCOMO_TURN_LIMIT` 在会话内部截断历史，从空库调用正式 remember，并对照普通 Top3、Top6。短前缀只选择前四类中非空参考证据全部在已导入范围内的原题，加两道预先均匀选择的第五类题；未按模型表现筛选。未设置截断时保留前几次完整会话的选题方式。此脚本检查首轮5条、同源扩展最多10条、总计15条摘要、阶段阈值5及兼容原文参数4/2；回答不发送原文。提取和整理共用摘要归属约束，验证新规则须从空库生成记忆。复现历史3＋3或首轮15条评测应使用对应版本的脚本和配置，不能混用检查点。
+
+```powershell
+$env:LOCOMO_SAMPLE='conv-48'
+$env:LOCOMO_SESSIONS='2'
+$env:LOCOMO_TURN_LIMIT='28'
+$env:LOCOMO_ALL_QUESTIONS='false'
+$env:LOCOMO_OUT='D:\recall\artifacts\locomo-top5-linked-quick-new'
+# 必须与当前配置模型一致；此变量只校验模型，不切换模型。
+$env:LOCOMO_EXPECTED_MODEL='gpt-6.1-sol'
+$env:LOCOMO_BUDGET_TOKENS='500000'
+$env:LOCOMO_ANSWER_RESERVE='100000'
+$env:RAG_FIRST_CANDIDATES='100'
+$env:RAG_FIRST_LIMIT='5'
+$env:RAG_NEIGHBORS_PER_SEED='100'
+$env:RAG_SECOND_LIMIT='10'
+$env:RAG_MAX_RECORDS='15'
+$env:RAG_STAGE_SOURCE_THRESHOLD='5'
+node --env-file=.env.local --import tsx scripts/evaluate-locomo-three-arm.ts
+```
+
+这一范围共28条发言、14道题、4个原文块；第二次会话只有前缀，不能称为两次完整会话。Top6能读取全部4块，不能据此评估长历史检索；各类别题数可能不均或为空。三组使用相同当前模型、查询向量、回答提示词和最终证据预算；动态摘要与普通原文的实际长度不同。模型返回usage后结算，未知用量保留预留且停止，不自动重复未知扣费调用。这里只设token上限，不保证运行时间。评分仍调用下文所述未修改的官方函数；Top3可将 `raw3` 投影为独立报告的 `raw` 字段后评分，不能把复制的请求账本重复相加。
 
 `scripts/evaluate-locomo.ts` 默认使用第一段 `conv-26` 的全部 19 次会话、419 条发言；按类别内均匀位置固定选题，默认每类 8 题，共 40 题。选题在导入前确定，不按模型表现选题。它是一个完整对话上的分层小样本试测，不是全量 LoCoMo 成绩。
 
@@ -132,3 +195,7 @@ node --import tsx scripts/render-locomo.ts artifacts/locomo-pilot-conv26-v2
 前四类按官方规则计算经过词干处理的 token F1；第 5 类按官方规则检查弃答短语，单独报告。五类平均混合了不同指标，不能称为正确率。服务失败和未完成题目单列，不混作语义错误。输出 `scores.json`，包含逐题分数、类别分数、来源覆盖率和两组对照。保留原始答案便于人工复核；词匹配得分不等同于人工判断。
 
 正式报告还应说明仅测一个对话、每类仅 8 题、没有多次重复、图像未直接读取，以及模型和网络波动。增加样本时先固定选题和配置，不能根据试测答案调参后仍把该试测作为独立验证集。
+
+### Top8 同源摘要扩展实验
+
+新增独立工具 `scripts/locomo-linked-summaries.ts`：保留原摘要，从前8条摘要沿全部原文ID关联找回其他热区摘要，按ID去重并按问题向量排序，受共享长度预算限制；不发送原文、不递归扩展。`scripts/audit-locomo-linked-summaries.ts` 复用8道既有诊断题的缓存向量做离线检查，不调用模型。`scripts/evaluate-locomo-linked-summaries.ts` 在冻结库上完成相同50题的新动态回答，旧控制组不重跑；`scripts/render-locomo-linked-summaries.ts` 核对来源及用量并汇总官方分数与辅助判分。不改变正式检索。规则、结果与已知限制见 [Top8扩展对照](locomo-top8-linked-summaries.md)。

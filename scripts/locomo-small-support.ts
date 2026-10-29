@@ -33,6 +33,21 @@ export function makeSmallPlan(sample: Sample, sessionCount = 2) {
   return { sessions, turns, selected };
 }
 
+// A quick pilot may stop inside a session. Never admit reference evidence from
+// a later turn, and fix adversarial questions before generating predictions.
+export function makeBoundedPlan(sample: Sample, sessionCount: number, turnLimit: number, adversarialCount = 2) {
+  const prefix = makeSmallPlan(sample, sessionCount);
+  assert.ok(Number.isSafeInteger(turnLimit) && turnLimit > 0 && turnLimit <= prefix.turns.length);
+  const turns = prefix.turns.slice(0, turnLimit), ids = new Set(turns.map(t => t.id));
+  const known = sample.qa.map((qa, index) => ({ qa, index }))
+    .filter(({ qa }) => qa.category !== 5 && qa.evidence.length > 0 && qa.evidence.every(id => ids.has(id)));
+  const unknown = sample.qa.map((qa, index) => ({ qa, index })).filter(({ qa }) => qa.category === 5);
+  const count = Math.min(adversarialCount, unknown.length);
+  const selected = [...known, ...Array.from({ length: count }, (_, i) => unknown[Math.floor((i + 0.5) * unknown.length / count)])]
+    .sort((a, b) => a.index - b.index);
+  return { ...prefix, turns, selected };
+}
+
 // Ordinary RAG: consecutive raw turns, bounded character chunks, one-turn overlap.
 // Never cross a session boundary. Preserve every source turn, including long turns.
 export function plainChunks(turns: SourceTurn[], targetChars = 1400) {
@@ -46,6 +61,33 @@ export function plainChunks(turns: SourceTurn[], targetChars = 1400) {
     offset = end - offset > 1 && end < turns.length && turns[end].session === turns[offset].session ? end - 1 : end;
   }
   return chunks;
+}
+
+// Contextual fragments, not inferred Q/A pairs. A shared boundary turn keeps
+// adjacent replies together without guessing which statement answers which.
+export function humanDialogueFragments(turns: SourceTurn[], targetChars = 1600) {
+  const byId = new Map(turns.map(t => [t.id, t]));
+  return plainChunks(turns, targetChars).map((chunk, index) => {
+    const sources = chunk.sourceIds.map(id => byId.get(id)!);
+    return { id: `dialogue-${index + 1}`, turnIds: chunk.sourceIds,
+      question: `[Session date: ${sources[0].sourceDate}]\n${sources[0].content}`,
+      answer: sources.slice(1).map(t => t.content).join("\n"),
+      history: sources[0].history, date: sources[0].date };
+  });
+}
+
+export function selectBalancedQuestions(sample: Sample, count: number) {
+  assert.ok(Number.isSafeInteger(count) && count > 0 && count <= sample.qa.length);
+  const groups = [1, 2, 3, 4, 5].map(category => sample.qa.map((qa, index) => ({ qa, index })).filter(r => r.qa.category === category));
+  const quotas = groups.map(() => 0);
+  for (let assigned = 0; assigned < count;) {
+    for (const [i, group] of groups.entries()) {
+      if (assigned === count) break;
+      if (quotas[i] < group.length) { quotas[i]++; assigned++; }
+    }
+  }
+  return groups.flatMap((group, i) => Array.from({ length: quotas[i] }, (_, j) => group[Math.floor((j + 0.5) * group.length / quotas[i])]))
+    .sort((a, b) => a.index - b.index);
 }
 
 export type TokenAttempt = { chargedTokens: number; reserveTokens: number; phase: string; status: string;

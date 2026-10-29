@@ -1,10 +1,10 @@
-import { cosine, ranked } from "./similarity";
+import { ranked } from "./similarity";
 import { EvidenceBudget } from "./evidence-budget";
 import type { MemoryStore } from "./store";
 import type { Evidence, ExpansionReason, Hit, Memory, RetrievalMode, RetrievalPolicy } from "./types";
 
 export const DEFAULT_RETRIEVAL_POLICY: RetrievalPolicy = {
-  firstCandidates: 100, firstLimit: 15, neighborsPerSeed: 100, secondLimit: 15,
+  firstCandidates: 100, firstLimit: 5, neighborsPerSeed: 100, secondLimit: 10,
   sourceCandidatesPerMemory: 4, sourceLimitPerMemory: 2,
   maxRecords: 15, maxContextChars: 18_000, maxEstimatedTokens: 6000, maxRecordChars: 5000,
 };
@@ -65,31 +65,26 @@ export function retrieveFrom(store: MemoryStore, scope: string, space: string, q
   if (strategy === "sources") reason = "sources-only";
   else if (!first.length) reason = "no-first-results";
   else if (!budget.canAddMore()) reason = "budget-exhausted";
-  else if (first.length < 4) reason = "below-four-results";
-  else reason = "enough-first-results";
-  const expanded = reason === "below-four-results";
+  else reason = "source-linked-results";
+  const expanded = reason === "source-linked-results";
 
   if (expanded) {
     const excluded = new Set(first.map(x => x.id));
-    const byId = new Map(all.map(x => [x.id, x]));
-    const originalScores = new Map(all.map(x => [x.id, cosine(query, x.vector)]));
-    const eligible = all.filter(x => !excluded.has(x.id));
-    const neighbors = new Map<string, Memory & { score: number; originalScore: number; neighborScore: number; via: string }>();
-    for (const seed of first) {
-      for (const candidate of ranked(eligible, byId.get(seed.id)!.vector, policy.neighborsPerSeed, minScore)) {
-        const originalScore = originalScores.get(candidate.id)!;
-        const hit = { ...candidate, originalScore, neighborScore: candidate.score,
-          score: originalScore * 0.75 + candidate.score * 0.25, via: seed.id };
-        if (hit.score < minScore) continue;
-        if (!neighbors.has(hit.id) || neighbors.get(hit.id)!.score < hit.score) neighbors.set(hit.id, hit);
-      }
+    const sourceToSeed = new Map<string, string>();
+    for (const seed of first) for (const sourceId of seed.sourceIds) {
+      if (!sourceToSeed.has(sourceId)) sourceToSeed.set(sourceId, seed.id);
     }
+    // Traverse source IDs once, without reading originals or following newly
+    // admitted summaries. Cold versions never enter this candidate pool.
+    const eligible = all.filter(x => !excluded.has(x.id) && x.sourceIds.some(id => sourceToSeed.has(id)));
     const secondCap = Math.min(policy.secondLimit, policy.maxRecords - first.length);
-    for (const candidate of [...neighbors.values()].sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))) {
+    for (const candidate of ranked(eligible, query, eligible.length, -1)) {
       if (second.length >= secondCap || !budget.canAddMore()) break;
-      const hit = admit(candidate);
+      const via = first.find(seed => candidate.sourceIds.some(id => seed.sourceIds.includes(id)))!.id;
+      const hit = admit(candidate, { originalScore: candidate.score, via });
       if (hit) second.push(hit);
     }
+    if (!eligible.length) reason = "no-linked-results";
   }
   const suggestions: Hit[] = candidates.length === 0
     ? ranked(all, query, 3, -1).map(({ vector: _vector, ...hit }) => hit)

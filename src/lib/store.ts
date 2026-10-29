@@ -26,6 +26,7 @@ export class MemoryStore {
       );
       CREATE INDEX IF NOT EXISTS memory_scope ON memories(scope, space, status);
       CREATE INDEX IF NOT EXISTS record_scope ON records(scope);
+      CREATE TABLE IF NOT EXISTS record_sources (record_id TEXT PRIMARY KEY, source_type TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS stages (
         id TEXT PRIMARY KEY, scope TEXT NOT NULL, content TEXT NOT NULL,
         source_ids TEXT NOT NULL, created_at TEXT NOT NULL
@@ -44,8 +45,15 @@ export class MemoryStore {
   }
   close() { this.db.close(); }
   saveRecord(r: RecordEntry) {
-    this.db.prepare("INSERT INTO records VALUES (?, ?, ?, ?, ?, ?)")
-      .run(r.id, r.scope, r.question, r.answer, r.context, r.createdAt);
+    if (r.sourceType) this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("INSERT INTO records VALUES (?, ?, ?, ?, ?, ?)")
+        .run(r.id, r.scope, r.question, r.answer, r.context, r.createdAt);
+      if (r.sourceType) {
+        this.db.prepare("INSERT INTO record_sources VALUES (?, ?)").run(r.id, r.sourceType);
+        this.db.exec("COMMIT");
+      }
+    } catch (error) { if (r.sourceType) this.db.exec("ROLLBACK"); throw error; }
   }
   private insert(m: Memory) {
     this.db.prepare(`INSERT INTO memories
@@ -130,11 +138,12 @@ export class MemoryStore {
   records(scope: string, ids?: string[]): RecordEntry[] {
     if (ids?.length === 0) return [];
     const rows = ids
-      ? this.db.prepare(`SELECT * FROM records WHERE scope=? AND id IN (${ids.map(() => "?").join(",")})`).all(scope, ...ids)
-      : this.db.prepare("SELECT * FROM records WHERE scope=? ORDER BY created_at DESC").all(scope);
+      ? this.db.prepare(`SELECT r.*, s.source_type FROM records r LEFT JOIN record_sources s ON s.record_id=r.id WHERE r.scope=? AND r.id IN (${ids.map(() => "?").join(",")})`).all(scope, ...ids)
+      : this.db.prepare("SELECT r.*, s.source_type FROM records r LEFT JOIN record_sources s ON s.record_id=r.id WHERE r.scope=? ORDER BY r.created_at DESC").all(scope);
     const mapped = rows.map(row => ({
       id: String(row.id), scope: String(row.scope), question: String(row.question),
       answer: String(row.answer), context: String(row.context), createdAt: String(row.created_at),
+      ...(row.source_type === "human-dialogue" ? { sourceType: "human-dialogue" as const } : {}),
     }));
     return ids ? mapped.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id)) : mapped;
   }
@@ -142,11 +151,12 @@ export class MemoryStore {
     if (!ids.length) return [];
     if (preserveOrder) return this.records(scope, ids.slice(0, limit));
     // Bound database reads before loading full text; JSON avoids one SQL variable per source ID.
-    const rows = this.db.prepare(`SELECT * FROM records
-      WHERE scope=? AND id IN (SELECT value FROM json_each(?))
-      ORDER BY created_at DESC, id ASC LIMIT ?`).all(scope, JSON.stringify(ids), limit);
+    const rows = this.db.prepare(`SELECT r.*, s.source_type FROM records r LEFT JOIN record_sources s ON s.record_id=r.id
+      WHERE r.scope=? AND r.id IN (SELECT value FROM json_each(?))
+      ORDER BY r.created_at DESC, r.id ASC LIMIT ?`).all(scope, JSON.stringify(ids), limit);
     return rows.map(row => ({ id: String(row.id), scope: String(row.scope), question: String(row.question),
-      answer: String(row.answer), context: String(row.context), createdAt: String(row.created_at) }));
+      answer: String(row.answer), context: String(row.context), createdAt: String(row.created_at),
+      ...(row.source_type === "human-dialogue" ? { sourceType: "human-dialogue" as const } : {}) }));
   }
   stats(scope: string, space: string) {
     const all = this.memories(scope, space);
@@ -155,7 +165,7 @@ export class MemoryStore {
   }
 }
 
-const STORE_SCHEMA_VERSION = 5;
+const STORE_SCHEMA_VERSION = 6;
 const globalStore = globalThis as unknown as { ragStore?: MemoryStore; ragStoreSchemaVersion?: number };
 export function getStore() {
   if (!globalStore.ragStore) {

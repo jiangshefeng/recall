@@ -39,7 +39,7 @@ test("source ordering accepts only visible provenance IDs and appends all omitte
   assert.deepEqual(result.decisions[0].sourceOrder, ["r2", "r1", "incoming", "archived-old", "archived-incoming"]);
 });
 
-test("LLM-ranked merge sources persist and are the originals retrieval sends first", async () => {
+test("LLM-ranked merge sources persist for provenance without sending originals at query time", async () => {
   const env = { ...process.env }, fetch = globalThis.fetch;
   const scope = "source-order-e2e";
   try {
@@ -70,7 +70,9 @@ test("LLM-ranked merge sources persist and are the originals retrieval sends fir
     const store = getStore(), memory = store.memories(scope, undefined, "hot")[0];
     assert.deepEqual(memory.sourceOrder, memory.sourceIds.slice().reverse());
     const evidence = retrieveFrom(store, scope, memory.space, [1, 0], "sources", 0.5);
-    assert.deepEqual(evidence.records.map(record => record.question), ["第二次记录", "第一次记录"]);
+    assert.deepEqual(evidence.records, []);
+    assert.equal(evidence.context[0].content, "合并后的主题记忆");
+    assert.deepEqual(store.records(scope, memory.sourceOrder).map(record => record.question).sort(), ["第一次记录", "第二次记录"].sort());
   } finally { process.env = env; globalThis.fetch = fetch; }
 });
 

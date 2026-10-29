@@ -27,6 +27,7 @@ export type RecordEntry = {
   answer: string;
   context: string;
   createdAt: string;
+  sourceType?: "human-dialogue";
 };
 export type Hit = Omit<Memory, "vector"> & {
   score: number;
@@ -56,7 +57,7 @@ export type PromptEvidence = {
   content: string;
   truncated: boolean;
 };
-export type ExpansionReason = "sources-only" | "no-first-results" | "budget-exhausted" | "enough-first-results" | "below-four-results";
+export type ExpansionReason = "sources-only" | "no-first-results" | "budget-exhausted" | "enough-first-results" | "below-four-results" | "source-linked-results" | "no-linked-results";
 export type Evidence = {
   stages?: StageSummary[];
   suggestions?: Hit[];

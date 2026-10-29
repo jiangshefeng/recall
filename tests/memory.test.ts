@@ -42,17 +42,17 @@ test("retrieval isolates scopes/models, removes duplicate second-hop hits and pr
       ["cold", [1, 0.15], { status: "cold" }], ["irrelevant", [0, 1], {}],
       ["secret", [1, 0], { scope: "b" }], ["other-model", [1, 0], { space: "other" }],
     ] as [string, number[], Partial<Memory>][]) {
-      const m = memory(id, vector, overrides);
+      const m = memory(id, vector, { sourceIds: ["shared-source"], ...overrides });
       store.saveMemory(m);
       store.saveRecord({ id, scope: m.scope, question: id, answer: "answer", context: "", createdAt: "2026-01-01" });
     }
     const expanded = retrieveFrom(store, "a", "test", [1, 0], "expand", 0.5, { firstLimit: 1 });
     assert.deepEqual(expanded.first.map(x => x.id), ["a1"]);
-    assert.deepEqual(expanded.second.map(x => x.id), ["a2", "a3"]);
-    assert.equal(expanded.records.length, 3);
+    assert.deepEqual(expanded.second.map(x => x.id), ["a2", "a3", "a4", "irrelevant"]);
+    assert.equal(expanded.records.length, 0);
     const direct = retrieveFrom(store, "a", "test", [1, 0], "sources", 0.5);
     assert.equal(direct.second.length, 0);
-    assert.equal(direct.records.length, 3);
+    assert.equal(direct.records.length, 0);
   } finally { store.close(); }
 });
 
@@ -92,8 +92,8 @@ test("successive merges flatten all source IDs and retrieval never reads cold su
   assert.equal(reads, 1);
   assert.deepEqual(result.first.map(m => m.id), [final.id]);
   assert.equal(result.second.length, 0);
-  assert.deepEqual(result.records.map(r => r.id), ["one", "three"]);
-  assert.equal(result.context.length, 2);
+  assert.deepEqual(result.records, []);
+  assert.equal(result.context.length, 1);
   assert.deepEqual(result.first[0].sourceIds, ["one", "two", "three"]);
   assert.equal(store.records("a").length, 3);
 });
