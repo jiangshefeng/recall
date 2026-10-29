@@ -48,7 +48,7 @@ export type RetrievalPolicy = {
   maxRecordChars: number;
 };
 export type PromptEvidence = {
-  kind?: "stage";
+  kind?: "summary" | "stage";
   sourceCount?: number;
   citation: number;
   id: string;
@@ -56,7 +56,7 @@ export type PromptEvidence = {
   content: string;
   truncated: boolean;
 };
-export type ExpansionReason = "sources-only" | "no-first-results" | "budget-exhausted" | "enough-first-results" | "single-first-result";
+export type ExpansionReason = "sources-only" | "no-first-results" | "budget-exhausted" | "enough-first-results" | "below-four-results";
 export type Evidence = {
   stages?: StageSummary[];
   suggestions?: Hit[];

@@ -145,12 +145,12 @@ export default function Home() {
         <section className="chat-panel panel">
           <div className="messages" aria-live="polite" ref={bottom}>
             {!messages.length && <div className="welcome"><span className="welcome-kicker">RECALL</span><h2>从这里开始对话</h2><p>问一个问题，或告诉我需要记住的信息。</p>{demo && <div className="suggestions">{suggestions.map(q => <button disabled={busy || !snapshot?.config.ready} key={q} onClick={() => void send(q)}>{q}</button>)}</div>}<small>{demo ? "演示模式使用规则响应，载入示例后可体验记忆检索。" : "相关记忆会自动参与回答，可展开右侧面板查看。"}</small></div>}
-            {messages.map((m, i) => <article className={`message ${m.role}`} key={i}><div className="message-body"><div className="message-label">{m.role === "user" ? "你" : "Recall"}{m.elapsedMs !== undefined && <small>{(m.elapsedMs / 1000).toFixed(1)}s</small>}</div><div className="message-content">{m.role === "assistant" ? <MarkdownContent>{m.content}</MarkdownContent> : m.content}</div>{m.note && <div className="memory-note">{m.note}</div>}{m.evidence && <button className="text-button" onClick={() => { setEvidence(m.evidence!); setTraceOpen(true); }}>查看本次检索 · {m.evidence.records.length} 条原文</button>}</div></article>)}
+            {messages.map((m, i) => <article className={`message ${m.role}`} key={i}><div className="message-body"><div className="message-label">{m.role === "user" ? "你" : "Recall"}{m.elapsedMs !== undefined && <small>{(m.elapsedMs / 1000).toFixed(1)}s</small>}</div><div className="message-content">{m.role === "assistant" ? <MarkdownContent>{m.content}</MarkdownContent> : m.content}</div>{m.note && <div className="memory-note">{m.note}</div>}{m.evidence && <button className="text-button" onClick={() => { setEvidence(m.evidence!); setTraceOpen(true); }}>查看本次检索 · {m.evidence.context.length} 条摘要</button>}</div></article>)}
             {busy && <div className="working" role="status"><span className="spinner" />{phase}</div>}
           </div>
           <form className="composer" onSubmit={e => { e.preventDefault(); void send(); }}>
             <label className="sr-only" htmlFor="question">输入问题</label><textarea id="question" value={input} maxLength={4000} onChange={e => setInput(e.target.value)} placeholder="问一个问题，或告诉我需要记住的信息…" disabled={busy} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} />
-            <div className="composer-toolbar"><span>关联检索 · 自动追溯原文</span><button className="button primary" type="submit" disabled={busy || !input.trim() || !snapshot?.config.ready}>发送</button></div>
+            <div className="composer-toolbar"><span>摘要检索 · 条件关联扩展</span><button className="button primary" type="submit" disabled={busy || !input.trim() || !snapshot?.config.ready}>发送</button></div>
           </form><div className="composer-footer">Enter 发送 · Shift + Enter 换行 · 历史回答未经事实验证</div>
         </section>
 

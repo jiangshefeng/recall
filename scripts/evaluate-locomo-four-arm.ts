@@ -21,6 +21,8 @@ const datasetPath = resolve("artifacts/locomo-data/locomo10.json"), bytes = read
 const sample: Sample = JSON.parse(bytes.toString("utf8").replace(/^\uFEFF/, "")).find((s: Sample) => s.sample_id === sampleId);
 assert.ok(sample);
 const fullConversation = process.env.LOCOMO_ALL_QUESTIONS === "true";
+const questionLimit = Number(process.env.LOCOMO_QUESTION_LIMIT || 0);
+assert.ok(Number.isSafeInteger(questionLimit) && questionLimit >= 0 && questionLimit <= sample.qa.length);
 const includeRaw3 = process.env.LOCOMO_INCLUDE_RAW3 !== "false";
 const prefix = makeSmallPlan(sample, sessionCount);
 assert.ok(Number.isSafeInteger(turnLimit) && turnLimit > 0 && turnLimit <= prefix.turns.length);
@@ -29,7 +31,10 @@ const turnIds = new Set(turns.map(turn => turn.id));
 const eligibleQuestions = prefix.selected.filter(({ qa }) => qa.category !== 5 && qa.evidence.length > 0 && qa.evidence.every(id => turnIds.has(id)));
 const unknownQuestions = sample.qa.map((qa, index) => ({ qa, index })).filter(({ qa }) => qa.category === 5);
 const unknownCount = Math.min(2, unknownQuestions.length);
-const selected = fullConversation ? sample.qa.map((qa, index) => ({ qa, index }))
+const allOfficialQuestions = sample.qa.map((qa, index) => ({ qa, index }));
+const selected = fullConversation ? questionLimit > 0 && questionLimit < allOfficialQuestions.length
+  ? Array.from({ length: questionLimit }, (_, i) => allOfficialQuestions[Math.floor((i + 0.5) * allOfficialQuestions.length / questionLimit)])
+  : allOfficialQuestions
   : [...eligibleQuestions,
     ...Array.from({ length: unknownCount }, (_, i) => unknownQuestions[Math.floor((i + 0.5) * unknownQuestions.length / unknownCount)])]
     .sort((a, b) => a.index - b.index);
@@ -41,7 +46,7 @@ assert.ok(plan.selected.length > 0);
 process.env.RAG_DB_PATH = resolve(out, "dynamic.sqlite");
 const cfg = modelConfig(), policy = retrievalPolicyFromEnv();
 assert.equal(cfg.mode, "live"); assert.equal(cfg.llmModel, process.env.LOCOMO_EXPECTED_MODEL || cfg.llmModel); assert.ok(publicConfig().ready);
-assert.equal(policy.firstLimit, 3); assert.equal(policy.secondLimit, 2);
+assert.equal(policy.firstLimit, 15); assert.equal(policy.secondLimit, 15); assert.equal(policy.maxRecords, 15);
 assert.equal(policy.sourceCandidatesPerMemory, 4); assert.equal(policy.sourceLimitPerMemory, 2);
 assert.equal(Number(process.env.RAG_STAGE_SOURCE_THRESHOLD || 5), 5);
 const budgetTokens = Number(process.env.LOCOMO_BUDGET_TOKENS || 2000000);
@@ -55,7 +60,7 @@ const inputUsdPerMillion = Number(process.env.LOCOMO_INPUT_USD_PER_MILLION || 5)
 const outputUsdPerMillion = Number(process.env.LOCOMO_OUTPUT_USD_PER_MILLION || 15);
 const estimatedUsd = (inputTokens: number, outputTokens: number) =>
   (inputTokens * inputUsdPerMillion + outputTokens * outputUsdPerMillion) / 1_000_000;
-assert.ok(Number.isFinite(budgetUsd) && budgetUsd > 0 && budgetUsd <= 30);
+assert.ok(Number.isFinite(budgetUsd) && budgetUsd > 0 && budgetUsd <= 60);
 assert.ok(Number.isFinite(answerBudgetUsd) && answerBudgetUsd > 0 && answerBudgetUsd < budgetUsd);
 assert.ok(new Set(["localhost", "127.0.0.1", "::1"]).has(new URL(cfg.embeddingBase).hostname), "Pilot embeddings must remain local");
 const system = `You answer questions about a supplied historical conversation between named people.
@@ -70,7 +75,11 @@ const manifest = {
   benchmark: fullConversation ? "LoCoMo selected full conversations; not all ten conversations" : "LoCoMo continuous-prefix pilot; not full benchmark", sample: sample.sample_id,
   datasetSha256: digest(bytes), sessionCount: plan.sessions.length, turnLimit, turnCount: plan.turns.length,
   selectedQuestionIndices: plan.selected.map(r => r.index),
-  selection: fullConversation ? "Every official question in the complete conversation, all five categories; no prediction-based filtering" : "All selected category 1-4 questions whose reference evidence is wholly in the declared prefix, plus two evenly spaced category-5 questions. Fixed before any sample model calls; no selection by predictions.",
+  questionLimit: fullConversation ? plan.selected.length : null,
+  selection: fullConversation ? questionLimit > 0 && questionLimit < allOfficialQuestions.length
+    ? `Evenly spaced ${questionLimit} questions from the official question order in the complete conversation; fixed before model calls, no prediction-based filtering`
+    : "Every official question in the complete conversation; no prediction-based filtering"
+    : "All selected category 1-4 questions whose reference evidence is wholly in the declared prefix, plus two evenly spaced category-5 questions. Fixed before any sample model calls; no selection by predictions.",
   chatModel: cfg.llmModel, embeddingModel: cfg.embeddingModel, apiStyle: cfg.llmApiStyle,
   disableThinking: cfg.llmApiStyle !== "responses", temperature: cfg.llmApiStyle === "responses" ? null : 0,
   reasoningEffort: cfg.llmApiStyle === "responses" ? cfg.reasoningEffort : null,
@@ -81,7 +90,7 @@ const manifest = {
   mem0: "Mem0 OSS (Node SDK), independent local SQLite vector store, same local Ollama embeddings and Qwen chat model; original turns ingested one at a time; query top-6; no reranker; telemetry disabled",
   ordinaryRag: { chunkTargetChars: 1400, overlap: "one complete turn within session; long single turns kept whole", chunkCount: chunks.length,
     retrieval: "single-pass cosine top-6, no minimum score cutoff, no query expansion, no extraction/merge/reranking", context: "raw chunk only; no extra previous messages" },
-  dynamicRag: "Production remember and expand retrieval; raw source records carry six previous turns; same final evidence character/token budgets as ordinary RAG",
+  dynamicRag: "Production remember and expand retrieval; answer context contains matched hot summaries only, never linked raw source records; same final evidence character/token budgets as ordinary RAG",
   answerSystem: system, answerMaxTokens: 256, noRecentHistoryAtQuery: true, queryAnswersNeverWrittenBack: true,
   caveats: "Selected conversations, not full LoCoMo. Some data was used in previous debugging/evaluations; not a held-out set. Reference answers are never sent to the model. Raw chunks and dynamic source history differ intentionally. Model and retrieval settings changed since historical runs; differences cannot be attributed to retrieval changes alone.",
   sourceCode: Object.fromEntries(["src/lib/rag.ts", "src/lib/providers.ts", "src/lib/responses.ts", "src/lib/retrieval.ts", "src/lib/store.ts", "src/lib/compression.ts", "src/lib/types.ts", "src/lib/evidence-budget.ts", "src/lib/merge-protocol.ts", "src/lib/structured-output.ts", "scripts/evaluate-locomo-four-arm.ts", "scripts/locomo-small-support.ts"].map(p => [p, digest(readFileSync(p))])),
@@ -246,7 +255,7 @@ async function main() {
     assert.equal(report.mem0Ingestion.length, plan.turns.length);
     const recordToDialog = new Map(report.ingestion.map(r => [r.recordId, r.id]));
     const chunkToDialog = new Map(chunks.map(c => [c.id, c.sourceIds]));
-    const provenance = (e: Evidence, arm: "dynamic" | "raw" | "raw3") => [...new Set([...e.first, ...e.second].flatMap(h => h.includedSourceIds || [])
+    const provenance = (e: Evidence, arm: "dynamic" | "raw" | "raw3") => [...new Set([...e.first, ...e.second].flatMap(h => h.sourceIds)
       .flatMap(id => arm !== "dynamic" ? chunkToDialog.get(id) || [] : recordToDialog.has(id) ? [recordToDialog.get(id)!] : []))];
     report.stats = { dynamic: store.stats(scope, cfg.space), raw: raw.stats(scope, cfg.space),
       uniqueActiveStages: new Set(store.memories(scope, cfg.space, "hot").flatMap(m => m.stage ? [m.stage.id] : [])).size };

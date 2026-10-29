@@ -34,12 +34,12 @@ Responses模式在聊天、提取和整理时均请求SSE，设置 `store:false`
 
 | 环境变量 | 默认值 | 作用 |
 | --- | --- | --- |
-| `RAG_SEARCH_THRESHOLD` | **0.45** | live 首轮与二轮原问题 / 邻居相似度门槛 |
+| `RAG_SEARCH_THRESHOLD` | **0.45** | live 首轮问题相似度门槛；二轮按种子相似度和 75/25 合成分数筛选 |
 | `RAG_MERGE_THRESHOLD` | **0.6** | live 整理候选门槛，每条事实最多 3 条候选 |
-| `RAG_FIRST_CANDIDATES` | 20 | 首轮评分候选上限 |
-| `RAG_FIRST_LIMIT` | 3 | 首轮最多选入的记忆数 |
-| `RAG_NEIGHBORS_PER_SEED` | 5 | 每个首轮起点的邻居候选上限 |
-| `RAG_SECOND_LIMIT` | 2 | 条件触发时第二轮最多再选入的记忆数 |
+| `RAG_FIRST_CANDIDATES` | 100 | 首轮评分候选上限 |
+| `RAG_FIRST_LIMIT` | 15 | 首轮最多选入的摘要数；实际还受上下文预算限制 |
+| `RAG_NEIGHBORS_PER_SEED` | 100 | 每个首轮起点的邻居候选上限 |
+| `RAG_SECOND_LIMIT` | 15 | 第二轮最多选入数，且两轮总数不超过 `RAG_MAX_RECORDS` |
 
 这些分数是余弦相似度，不是置信度或准确率。降低门槛会扩大候选范围，也可能带来不相关内容。候选是否合并仍由 LLM 判断。阈值代码会限制到 `[-1, 1]`，异常数值回退默认值；建议使用上述正常范围内的数值校准。
 
@@ -49,9 +49,9 @@ demo 固定使用检索门槛 0.08、重复摘要候选门槛 0.64，且每条�
 
 | 环境变量 | 默认值 | 作用 |
 | --- | --- | --- |
-| `RAG_MAX_RECORDS` | 6 | 两轮共用的证据数上限，原文与阶段摘要合计，每个阶段摘要也算一条 |
-| `RAG_SOURCE_CANDIDATES_PER_MEMORY` | 4 | 每条命中记忆最多读取的未覆盖原文候选；合并记忆优先按 LLM 排序，其余按时间倒序，范围1–4 |
-| `RAG_SOURCE_LIMIT_PER_MEMORY` | 2 | 从候选中默认选前两条原文，范围1–4且不超过候选上限 |
+| `RAG_MAX_RECORDS` | 15 | 两轮共用的摘要数上限；回答只接收命中的摘要，不回查原文 |
+| `RAG_SOURCE_CANDIDATES_PER_MEMORY` | 4 | 兼容旧配置；查询回答不读取关联原文 |
+| `RAG_SOURCE_LIMIT_PER_MEMORY` | 2 | 兼容旧配置；查询回答只发送摘要 |
 | `RAG_CONTEXT_MAX_CHARS` | 18000 | 实际历史证据 JSON 的字符上限 |
 | `RAG_CONTEXT_MAX_TOKENS` | 6000 | 同一 JSON 的估算 token 上限 |
 | `RAG_RECORD_MAX_CHARS` | 5000 | 每条证据正文的字符上限 |

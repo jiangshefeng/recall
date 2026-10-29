@@ -55,6 +55,11 @@ export class EvidenceBudget {
     return true;
   }
 
+  addSummary(id: string, date: string, content: string, sourceCount: number): boolean {
+    if (!this.addEntry(id, date, content, { kind: "summary", sourceCount })) return false;
+    return true;
+  }
+
   private addEntry(id: string, date: string, full: string, metadata: Partial<PromptEvidence> = {}): boolean {
     if (this.seen.has(id) || this.context.length >= this.policy.maxRecords) return false;
     const maxLength = Math.min(full.length, this.policy.maxRecordChars);

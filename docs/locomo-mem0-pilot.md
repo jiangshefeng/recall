@@ -24,6 +24,9 @@ $env:LOCOMO_SAMPLE = 'conv-30'
 $env:LOCOMO_SESSIONS = '1'
 $env:LOCOMO_TURN_LIMIT = '8'
 $env:LOCOMO_OUT = 'artifacts/locomo-mem0-pilot-conv-30-t8-luna-v2'
+$env:LOCOMO_ALL_QUESTIONS = 'true'
+$env:LOCOMO_QUESTION_LIMIT = '100' # 完整会话中均匀抽取100题
+$env:LOCOMO_INCLUDE_RAW3 = 'false' # 只比较动态摘要、普通 Top 6 和 Mem0
 npm run test:locomo:mem0-pilot
 ```
 
